@@ -20,7 +20,7 @@ fi
 
 T=$(cd "$(mktemp -d /tmp/rex-durable-e2e.XXXXXX)" && pwd -P)
 H=$T/home
-mkdir -p "$H" "$T/bin" "$T/state" "$T/durable" "$T/my proj"
+mkdir -p "$H" "$T/bin" "$T/state" "$T/durable" "$T/my proj" "$T/two"
 : >"$T/init.lua"
 SOCK="unix://$T/rex.sock"
 passed=0
@@ -84,6 +84,7 @@ expect() { # description, command...
   if "$@"; then ok "$what"; else bad "$what"; fi
 }
 running() { pgrep -f -x "$1" | wc -l | tr -d ' '; }
+one_running() { [ "$(running "$1")" = 1 ]; }
 has_line() { printf '%s\n' "$listing" | grep -E -q -- "$1"; }
 # The block ID of a tab in a listing: block LISTING SESSION WINDOW.PANE
 block() { printf '%s\n' "$1" | awk -v s="$2" -v tab="$3" '$1 == s && $2 == tab { print $NF }'; }
@@ -99,7 +100,7 @@ if R do "$here/test/unit.lua" >"$T/unit.log" 2>&1; then ok "$(tail -1 "$T/unit.l
 if [ "${1:-}" = "--unit" ]; then echo; echo "$passed passed, $failed failed"; [ "$failed" = 0 ]; exit; fi
 
 echo "1. Save what runs in each tab"
-R do "$here/test/e2e_setup.lua" "bin=$T/bin" "dir=$T/my proj" >/dev/null
+R do "$here/test/e2e_setup.lua" "bin=$T/bin" "dir=$T/my proj" "dir2=$T/two" >/dev/null
 sleep 3
 D mode=save
 listing=$(show)
@@ -110,7 +111,11 @@ expect "another program and its command" has_line '^work 3\.1 program - sleep 42
 expect "a plain shell" has_line '^work 4\.1 shell '
 expect "a second session" has_line '^side 1\.1 chat fx FXB '
 before=$listing
-CLAUDE_ID=$(printf '%s\n' "$listing" | awk '$2 == "2.1" { print $5 }')
+CLAUDE_ID=$(printf '%s\n' "$listing" | awk '$1 == "work" && $2 == "2.1" { print $5 }')
+AGENT1=$(printf '%s\n' "$listing" | awk '$1 == "agents" && $2 == "1.1" && $3 == "chat" { print $5 }')
+AGENT2=$(printf '%s\n' "$listing" | awk '$1 == "agents" && $2 == "2.1" && $3 == "chat" { print $5 }')
+expect "two claude chats in one folder, each on its own conversation" \
+  test -n "$AGENT1" -a -n "$AGENT2" -a "$AGENT1" != "$AGENT2"
 
 echo "2. Restart: Rex brings back the tabs, rex-durable the programs"
 stop_server
@@ -136,6 +141,10 @@ listing=$(show)
 expect "fx chat reopened in the same tab" has_line "^work 1\.1 chat fx FXA $(block "$before" work 1.1)\$"
 expect "codex chat reopened on its conversation" has_line "^work 1\.2 chat codex $CODEX_ID "
 expect "claude chat reopened on its conversation" has_line "^work 2\.1 chat claude $CLAUDE_ID "
+expect "first claude chat in a shared folder reopened with its options" \
+  one_running "$T/bin/claude --model sonnet --dangerously-skip-permissions --remote-control hugger#4211 --resume $AGENT1"
+expect "second claude chat in that folder reopened with its options" \
+  one_running "$T/bin/claude --remote-control --model opus --resume $AGENT2"
 expect "a busy tab was waited for" grep -q 'trying again' "$T/startup.log"
 expect "second session's chat reopened once its tab was free" has_line '^side 1\.1 chat fx FXB '
 expect "program typed, not run" test "$(running "sleep 4242")" = 0
@@ -195,6 +204,8 @@ listing=$(show)
 expect "fx chat back in its tab" has_line '^work 1\.1 chat fx FXA '
 expect "codex chat back in its split" has_line "^work 1\.2 chat codex $CODEX_ID "
 expect "claude chat back" has_line "^work 2\.1 chat claude $CLAUDE_ID "
+expect "first claude chat in a shared folder back" has_line "^agents 1\.1 chat claude $AGENT1 "
+expect "second claude chat in a shared folder back" has_line "^agents 2\.1 chat claude $AGENT2 "
 expect "side session's chat back" has_line '^side 1\.1 chat fx FXB '
 expect "one copy of each chat" test "$(running "$T/bin/fx --resume FXA")" = 1
 rm -f "$T/supervise"
