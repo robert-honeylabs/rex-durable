@@ -95,6 +95,10 @@ has_words() { # text, words...
   for w in "$@"; do printf '%s\n' "$text" | tr ' ' '\n' | grep -qx -- "$w" || return 1; done
 }
 has_line() { printf '%s\n' "$listing" | grep -E -q -- "$1"; }
+contains() { # text, fixed strings...
+  local text=$1; shift
+  for s in "$@"; do printf '%s\n' "$text" | grep -qF -- "$s" || return 1; done
+}
 # The block ID of a tab in a listing: block LISTING SESSION WINDOW.PANE
 block() { printf '%s\n' "$1" | awk -v s="$2" -v tab="$3" '$1 == s && $2 == tab { print $NF }'; }
 
@@ -127,6 +131,8 @@ expect "two claude chats in one folder, each on its own conversation" \
   test -n "$AGENT1" -a -n "$AGENT2" -a "$AGENT1" != "$AGENT2"
 expect "pi chat from the record its extension writes" has_line '^agents 3\.1 chat pi 00000000-0000-7000-8000-'
 PI_ID=$(printf '%s\n' "$listing" | awk '$1 == "agents" && $2 == "3.1" { print $5 }')
+AGENT3=$(printf '%s\n' "$listing" | awk '$1 == "agents" && $2 == "4.1" && $3 == "chat" { print $5 }')
+expect "claude chat with a multi-word system prompt" test -n "$AGENT3"
 pi_folder="${T#/}/my proj"
 PI_FILE="$H/.pi/agent/sessions/--${pi_folder//\//-}--/2026-11-13T10-00-00-000Z_$PI_ID.jsonl"
 
@@ -165,6 +171,14 @@ expect "pi chat reopened on its session file with its options" \
   one_running "$T/bin/pi --model openai/gpt-6-astra --thinking xhigh --session $PI_FILE"
 pi_env=$(ps -wwE -o command= -p "$(pgrep -f -x "$T/bin/pi .* --session $PI_FILE")")
 expect "pi's env came back" has_words "$pi_env" FORCE_COLOR=2
+prompt_pid=$(pgrep -f -x "$T/bin/claude --model sonnet --tools Bash --system-prompt .* --resume $AGENT3" || true)
+expect "a multi-word system prompt reopened" test -n "$prompt_pid"
+if [ "$os" = Darwin ]; then
+  prompt_cmd=$("$T/app/procargs" "${prompt_pid:-0}")
+  expect "its system prompt came back as one word, and its env" contains "$prompt_cmd" \
+    '"--system-prompt","Create Rex panes as requested. Keep replies brief.","--remote-control","Xenomorph","--resume"' \
+    '"MAX_THINKING_TOKENS=0"'
+fi
 expect "no unkept env in any save" sh -c "! grep -rq hush '$T/durable'"
 expect "a busy tab was waited for" grep -q 'trying again' "$T/startup.log"
 expect "second session's chat reopened once its tab was free" has_line '^side 1\.1 chat fx FXB '
@@ -228,6 +242,7 @@ expect "claude chat back" has_line "^work 2\.1 chat claude $CLAUDE_ID "
 expect "first claude chat in a shared folder back" has_line "^agents 1\.1 chat claude $AGENT1 "
 expect "second claude chat in a shared folder back" has_line "^agents 2\.1 chat claude $AGENT2 "
 expect "pi chat back" has_line "^agents 3\.1 chat pi $PI_ID "
+expect "claude chat with a multi-word system prompt back" has_line "^agents 4\.1 chat claude $AGENT3 "
 expect "side session's chat back" has_line '^side 1\.1 chat fx FXB '
 expect "one copy of each chat" test "$(running "$T/bin/fx --resume FXA")" = 1
 rm -f "$T/supervise"

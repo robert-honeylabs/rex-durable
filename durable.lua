@@ -434,8 +434,12 @@ M.CHATS = {
   },
   claude = {
     values = { ["--model"] = true, ["--permission-mode"] = true, ["--add-dir"] = true,
-               ["--settings"] = true, ["--agent"] = true },
-    switches = { ["--dangerously-skip-permissions"] = true },
+               ["--settings"] = true, ["--agent"] = true, ["--system-prompt"] = true,
+               ["--append-system-prompt"] = true, ["--tools"] = true, ["--allowedTools"] = true,
+               ["--disallowedTools"] = true, ["--mcp-config"] = true, ["--effort"] = true,
+               ["--plugin-dir"] = true, ["--name"] = true, ["-n"] = true },
+    switches = { ["--dangerously-skip-permissions"] = true, ["--strict-mcp-config"] = true,
+                 ["--safe-mode"] = true },
     optional = { ["--remote-control"] = true },
     package = "claude-code",
     record = function(pid, home)

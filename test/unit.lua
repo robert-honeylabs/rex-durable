@@ -188,6 +188,27 @@ local pending = { { kind = "chat", app = "claude", cwd = "/w", pid = 90000014, a
 M._resolve_chats(pending, { ps = { [90000014] = { age = 3600 } }, now = os.time(), home = home,
                             claimed = { ["claude:" .. new_id] = true, ["claude:" .. second_id] = true } })
 check("a chat never takes another chat's conversation", { pending[1].kind, pending[1].id }, { "program", nil })
+local prompt = "Create Rex panes as requested using Bash. Don't ask first. Keep replies brief."
+claude_pid(90000015, new_id, true)
+pane = M.describe({ foreground = { pid = 90000015, name = "claude", cwd = "/w" },
+                    ancestors = { { pid = 90000002, name = "zsh", cwd = "/w" } } },
+                  { ps = { [90000015] = { age = 100, env = { "MAX_THINKING_TOKENS=0", "TERM=xterm" },
+                    argv = { "claude", "--model", "sonnet", "--safe-mode", "--strict-mcp-config",
+                             "--dangerously-skip-permissions", "--tools", "Bash", "--system-prompt", prompt,
+                             "--remote-control", "Xenomorph" } } },
+                    files = {}, now = os.time(), home = home })
+check("a launcher with a multi-word system prompt comes back as typed", M.command_for(pane),
+  "MAX_THINKING_TOKENS=0 claude --model sonnet --safe-mode --strict-mcp-config " ..
+  "--dangerously-skip-permissions --tools Bash --system-prompt " ..
+  "'Create Rex panes as requested using Bash. Don'\\''t ask first. Keep replies brief.' " ..
+  "--remote-control Xenomorph --resume " .. new_id .. "\n")
+check("claude keeps its prompt, tool, MCP, effort, plugin, and name options",
+  cmd({ app = "claude", id = uuid,
+        argv = { "claude", "--append-system-prompt", "be terse", "--allowedTools", "Bash(git *)",
+                 "--disallowedTools", "Edit", "--mcp-config", "/m.json", "--effort", "high",
+                 "--plugin-dir", "/p", "--name", "rex", "-n", "two", "--print" } }),
+  "claude --append-system-prompt 'be terse' --allowedTools 'Bash(git *)' --disallowedTools Edit " ..
+  "--mcp-config /m.json --effort high --plugin-dir /p --name rex -n two --resume " .. uuid)
 -- pi's record, written by pi/rex-durable.ts: its title hides argv and env from ps
 local pi_file = home .. "/.pi/agent/sessions/--w--/2026-11-16T17-52-21-649Z_" .. uuid .. ".jsonl"
 local function pi_tab(pid, record)
