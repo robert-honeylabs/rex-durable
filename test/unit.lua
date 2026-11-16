@@ -78,6 +78,24 @@ check("claude keeps permission mode",
 check("codex resume with model",
   cmd({ app = "codex", id = uuid, argv = { "codex", "-m", "gpt-5", "--full-auto" } }),
   "codex resume -m gpt-5 " .. uuid)
+check("claude keeps --remote-control with its name, drops --worktree",
+  cmd({ app = "claude", id = uuid,
+        argv = { "claude", "--model", "sonnet", "--dangerously-skip-permissions",
+                 "--remote-control", "hugger#4211", "--worktree", "w1" } }),
+  "claude --model sonnet --dangerously-skip-permissions --remote-control 'hugger#4211' --resume " .. uuid)
+check("claude keeps a bare --remote-control",
+  cmd({ app = "claude", id = uuid,
+        argv = { "claude", "--remote-control", "--model", "opus", "--worktree" } }),
+  "claude --remote-control --model opus --resume " .. uuid)
+check("claude --remote-control=name",
+  cmd({ app = "claude", id = uuid, argv = { "claude", "--remote-control=Xeno" } }),
+  "claude --remote-control=Xeno --resume " .. uuid)
+check("a value option with no value is dropped",
+  cmd({ app = "claude", id = uuid, argv = { "claude", "--model" } }), "claude --resume " .. uuid)
+check("codex keeps --yolo",
+  cmd({ app = "codex", id = uuid,
+        argv = { "codex", "--yolo", "--model", "gpt-6", "-c", "model_reasoning_effort=medium" } }),
+  "codex resume --yolo --model gpt-6 -c model_reasoning_effort=medium " .. uuid)
 check("quote spaces", M.join({ "cd", "/a b/it's" }), "cd '/a b/it'\\''s'")
 
 -- What a tab runs (process IDs above any real pid_max, so /proc never answers)
