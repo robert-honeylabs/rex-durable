@@ -9,6 +9,7 @@ Rex saves your sessions, tabs, and splits when its server stops, and restores th
 | [fx](https://fx.sh) chat | Reopens on its conversation: `fx --resume <id>` |
 | Claude Code chat | Reopens on its conversation: `claude --resume <id>` |
 | Codex chat | Reopens on its conversation: `codex resume <id>` |
+| [pi](https://github.com/badlogic/pi-mono) chat | Reopens on its conversation: `pi --session <file>` |
 | Any other program | Typed at the prompt, not run. Press Enter if you want it. |
 | Plain shell | Left alone |
 
@@ -28,6 +29,7 @@ The installer:
 2. Copies `durable.lua` to `~/Library/Application Support/rex-durable/` on macOS, or `~/.local/share/rex-durable/` on Linux.
 3. Starts it as a login service: a launchd agent on macOS, a systemd user service on Linux.
 4. Adds command palette actions (`rex_durable.lua` in your Rex config folder). `--add-to-config` also loads them from `init.lua` for you. Without it, the installer prints the one line to add.
+5. If you use pi (`~/.pi/agent` exists), adds the pi extension that tells rex-durable which conversation each pi chat is on.
 
 Run `./install.sh` again to update. Use `--no-service` to install the files without the service, or `REX=/path/to/rex ./install.sh` to choose the `rex` command.
 
@@ -63,7 +65,10 @@ Add `programs=false` to any mode to reopen chats only, and never type other prog
 - **Saving.** For each tab, it records the block ID, the folder, and the program from the terminal's `process` method. It then works out which conversation each chat is on:
   - **fx** holds a lock file for its session (`~/.fx/sessions/v2/<id>/lock`).
   - **Codex** keeps its rollout file open (`~/.codex/sessions/…/rollout-…-<id>.jsonl`), or the ID is on its command line (`codex resume <id>`).
-  - **Claude Code** names the session on its command line (`--resume <id>`). Otherwise rex-durable uses the newest session file for that folder written since the chat started. If two such chats share a folder, it can't tell them apart, so they come back typed, not run.
+  - **Claude Code** writes a record for each running chat (`~/.claude/sessions/<pid>.json`) naming its current conversation, so it follows `/clear` and `/resume`, and two chats in one folder each reopen on their own conversation. Without a record it uses `--resume <id>` from the command line, then the newest session file for that folder written since the chat started.
+  - **pi** hides its command line, so the installer adds a small pi extension (`~/.pi/agent/extensions/rex-durable.ts`). It writes `~/.pi/agent/rex-durable/<pid>.json` with the chat's session file, command line, and the environment variables below. Without the extension, rex-durable uses the newest session file for that folder, and the chat's options are lost. A pi chat where nothing has been said yet has no session file, so it comes back typed.
+
+  A reopened chat keeps the options that shape it, such as the model, permission mode, Claude's `--remote-control`, and Codex's `--yolo`. Options tied to the old run, like Claude's `--worktree`, are dropped. Two environment variables set when the chat started, `FORCE_COLOR` and `MAX_THINKING_TOKENS`, are typed back in front of the command. No other environment is saved, so tokens and secrets never reach a save file.
 
   Saves go to `~/Library/Application Support/rex-durable/` on macOS, or `~/.local/state/rex-durable/` on Linux. It keeps the last save of each of the latest 10 servers.
 - **Restoring.** When the watcher connects to a server instance it hasn't seen, it takes the last save from the previous server. Rex restores its own sessions with the same block IDs, so each program goes back into exactly the tab it came from, by block ID first and then by session name and position. If the server starts empty, for example after `rex server stop --discard`, rex-durable creates the saved sessions itself.
@@ -101,7 +106,7 @@ test/e2e.sh --unit     # unit tests only
 lua5.1 test/platform.lua   # process and file helpers on Linux, without Rex
 ```
 
-The end-to-end test needs Rex and a C compiler. It runs its own Rex server on its own socket, with fake fx, Claude Code, and Codex chats in a throwaway home folder. It never connects to your Rex server and never touches your real chats.
+The end-to-end test needs Rex and a C compiler. It runs its own Rex server on its own socket, with fake fx, Claude Code, Codex, and pi chats in a throwaway home folder. It never connects to your Rex server and never touches your real chats.
 
 rex-durable is not made by or affiliated with Superlogical.
 
