@@ -6,7 +6,7 @@
 #   REX=/path/to/rex test/e2e.sh
 #
 # It runs its own Rex server on its own socket and state folder, with fake
-# fx, Claude Code, and Codex chats that keep their files in a throwaway home
+# fx, Claude Code, Codex, and pi chats that keep their files in a throwaway home
 # folder. It never connects to your own Rex server or touches your real chats,
 # and it stops only the server it started, by its process ID.
 set -euo pipefail
@@ -37,6 +37,7 @@ start_server() {
   # Not through a shell function: $! must be the server itself, so stopping
   # it really stops the server, the way a restart does.
   env -u REX_SESSION -u REX_BLOCK -u REX_SERVER -u REX_CLIENT -u REX_CONFIG \
+    -u FORCE_COLOR -u MAX_THINKING_TOKENS \
     "$REX" server run --listen "$SOCK" --state-dir "$T/state" --config "$T/init.lua" "$@" \
     >>"$T/server.log" 2>&1 &
   server_pid=$!
@@ -85,11 +86,15 @@ expect() { # description, command...
 }
 running() { pgrep -f -x "$1" | wc -l | tr -d ' '; }
 one_running() { [ "$(running "$1")" = 1 ]; }
+has_words() { # text, words...
+  local text=$1; shift
+  for w in "$@"; do printf '%s\n' "$text" | tr ' ' '\n' | grep -qx -- "$w" || return 1; done
+}
 has_line() { printf '%s\n' "$listing" | grep -E -q -- "$1"; }
 # The block ID of a tab in a listing: block LISTING SESSION WINDOW.PANE
 block() { printf '%s\n' "$1" | awk -v s="$2" -v tab="$3" '$1 == s && $2 == tab { print $NF }'; }
 
-for app in fx claude codex; do
+for app in fx claude codex pi; do
   cc -O0 -o "$T/bin/$app" -DAPP="\"$app\"" -DFAKE_HOME="\"$H\"" "$here/test/fake.c"
 done
 CODEX_ID=11111111-2222-4333-8444-555555555555
@@ -116,6 +121,10 @@ AGENT1=$(printf '%s\n' "$listing" | awk '$1 == "agents" && $2 == "1.1" && $3 == 
 AGENT2=$(printf '%s\n' "$listing" | awk '$1 == "agents" && $2 == "2.1" && $3 == "chat" { print $5 }')
 expect "two claude chats in one folder, each on its own conversation" \
   test -n "$AGENT1" -a -n "$AGENT2" -a "$AGENT1" != "$AGENT2"
+expect "pi chat from the record its extension writes" has_line '^agents 3\.1 chat pi 00000000-0000-7000-8000-'
+PI_ID=$(printf '%s\n' "$listing" | awk '$1 == "agents" && $2 == "3.1" { print $5 }')
+pi_folder="${T#/}/my proj"
+PI_FILE="$H/.pi/agent/sessions/--${pi_folder//\//-}--/2026-11-13T10-00-00-000Z_$PI_ID.jsonl"
 
 echo "2. Restart: Rex brings back the tabs, rex-durable the programs"
 stop_server
@@ -146,8 +155,12 @@ expect "first claude chat in a shared folder reopened with its options" \
 expect "second claude chat in that folder reopened with its options" \
   one_running "$T/bin/claude --remote-control --model opus --resume $AGENT2"
 agent_env=$(ps -wwE -o command= -p "$(pgrep -f -x "$T/bin/claude --model sonnet .* --resume $AGENT1")")
-expect "its env came back" sh -c 'case "$1" in *" FORCE_COLOR=3 "*" MAX_THINKING_TOKENS=0 "*|*" MAX_THINKING_TOKENS=0 "*" FORCE_COLOR=3 "*) ;; *) exit 1 ;; esac' sh "$agent_env "
+expect "its env came back" has_words "$agent_env" FORCE_COLOR=3 MAX_THINKING_TOKENS=0
 expect "and no env it doesn't keep" sh -c 'case "$1" in *SECRET_TOKEN*) exit 1 ;; esac' sh "$agent_env"
+expect "pi chat reopened on its session file with its options" \
+  one_running "$T/bin/pi --model openai/gpt-6-astra --thinking xhigh --session $PI_FILE"
+pi_env=$(ps -wwE -o command= -p "$(pgrep -f -x "$T/bin/pi .* --session $PI_FILE")")
+expect "pi's env came back" has_words "$pi_env" FORCE_COLOR=2
 expect "no unkept env in any save" sh -c "! grep -rq hush '$T/durable'"
 expect "a busy tab was waited for" grep -q 'trying again' "$T/startup.log"
 expect "second session's chat reopened once its tab was free" has_line '^side 1\.1 chat fx FXB '
@@ -210,6 +223,7 @@ expect "codex chat back in its split" has_line "^work 1\.2 chat codex $CODEX_ID 
 expect "claude chat back" has_line "^work 2\.1 chat claude $CLAUDE_ID "
 expect "first claude chat in a shared folder back" has_line "^agents 1\.1 chat claude $AGENT1 "
 expect "second claude chat in a shared folder back" has_line "^agents 2\.1 chat claude $AGENT2 "
+expect "pi chat back" has_line "^agents 3\.1 chat pi $PI_ID "
 expect "side session's chat back" has_line '^side 1\.1 chat fx FXB '
 expect "one copy of each chat" test "$(running "$T/bin/fx --resume FXA")" = 1
 rm -f "$T/supervise"

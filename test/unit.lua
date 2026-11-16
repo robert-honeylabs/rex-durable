@@ -53,6 +53,11 @@ check("codex resume", M.argv_session("codex", { "codex", "resume", uuid }), uuid
 check("codex --last", M.argv_session("codex", { "codex", "resume", "--last" }), nil)
 check("claude via node", M.is_app("claude", "node", { "node", "/usr/local/bin/claude" }), true)
 check("codex binary", M.is_app("codex", "codex", { "/opt/homebrew/bin/codex" }), true)
+check("pi by its process title", M.is_app("pi", "pi", { "pi" }), true)
+check("pi via node", M.is_app("pi", "node",
+  { "node", "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js" }), true)
+check("pi --session", M.argv_session("pi", { "pi", "--session", "01a1e57d" }), "01a1e57d")
+check("pi --session-id=", M.argv_session("pi", { "pi", "--session-id=abc" }), "abc")
 check("not claude", M.is_app("claude", "node", { "node", "server.js" }), false)
 
 -- Commands that reopen a chat
@@ -103,6 +108,12 @@ check("env typed in front of a chat, sorted, only kept names",
 check("no env, no prefix",
   M.command_for({ kind = "chat", app = "claude", id = uuid, argv = { "claude" } }),
   "claude --resume " .. uuid .. "\n")
+check("pi reopens its session file with its options",
+  cmd({ app = "pi", id = uuid, session_file = "/h/.pi/agent/sessions/--my proj--/t_" .. uuid .. ".jsonl",
+        argv = { "pi", "--model", "openai/gpt-6-astra", "--thinking", "xhigh", "--session", "old", "--verbose" } }),
+  "pi --model openai/gpt-6-astra --thinking xhigh --session '/h/.pi/agent/sessions/--my proj--/t_" .. uuid .. ".jsonl'")
+check("pi without a session file reopens by ID",
+  cmd({ app = "pi", id = "01a1e57d", argv = { "pi", "--session", "01a1e57d" } }), "pi --session 01a1e57d")
 check("quote spaces", M.join({ "cd", "/a b/it's" }), "cd '/a b/it'\\''s'")
 
 -- What a tab runs (process IDs above any real pid_max, so /proc never answers)
@@ -168,6 +179,26 @@ local pending = { { kind = "chat", app = "claude", cwd = "/w", pid = 90000014, a
 M._resolve_chats(pending, { ps = { [90000014] = { age = 3600 } }, now = os.time(), home = home,
                             claimed = { ["claude:" .. new_id] = true, ["claude:" .. second_id] = true } })
 check("a chat never takes another chat's conversation", { pending[1].kind, pending[1].id }, { "program", nil })
+-- pi's record, written by pi/rex-durable.ts: its title hides argv and env from ps
+local pi_file = home .. "/.pi/agent/sessions/--w--/2026-11-16T17-52-21-649Z_" .. uuid .. ".jsonl"
+local function pi_tab(pid, record)
+  put(home .. "/.pi/agent/rex-durable/" .. pid .. ".json", rex.json.encode(record))
+  return M.describe({ foreground = { pid = pid, name = "pi", cwd = "/w" },
+                      ancestors = { { pid = 90000002, name = "zsh", cwd = "/w" } } },
+                    { ps = { [pid] = { age = 100, args = "pi" } }, files = {}, now = os.time(), home = home,
+                      env = { [pid] = { "PI_CODING_AGENT=true" } } })
+end
+put(pi_file, "{}\n")
+pane = pi_tab(90000030, { pid = 90000030, sessionId = uuid, sessionFile = pi_file, cwd = "/w",
+                          argv = { "pi", "--model", "openai/gpt-6-astra", "--thinking", "xhigh" },
+                          env = { "FORCE_COLOR=1", "OPENAI_API_KEY=sk-x" } })
+check("pi chat from its record, with its options and env",
+  { pane.kind, pane.app, pane.id, M.command_for(pane) },
+  { "chat", "pi", uuid, "FORCE_COLOR=1 pi --model openai/gpt-6-astra --thinking xhigh --session " .. pi_file .. "\n" })
+pane = pi_tab(90000031, { pid = 90000031, sessionId = "01a1e57d-1290-713b-b0a2-f8264f67f82f", cwd = "/w",
+                          argv = { "pi", "--no-session", "--model", "m" }, env = {} })
+check("pi with no session file comes back typed",
+  { pane.kind, pane.argv }, { "program", { "pi", "--no-session", "--model", "m" } })
 rex.exec({ "rm", "-rf", home })
 
 pane = M.describe({ foreground = { pid = 90000021, name = "codex", cwd = "/w" },

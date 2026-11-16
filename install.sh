@@ -78,6 +78,15 @@ mkdir -p "$data"
 cp "$here/durable.lua" "$script.new" && mv "$script.new" "$script"
 say "Installed $script"
 
+# pi hides which conversation it's on; this extension tells rex-durable.
+pi_agent="$HOME/.pi/agent"
+if [ -d "$pi_agent" ]; then
+  mkdir -p "$pi_agent/extensions"
+  cp "$here/pi/rex-durable.ts" "$pi_agent/extensions/rex-durable.ts.new" &&
+    mv "$pi_agent/extensions/rex-durable.ts.new" "$pi_agent/extensions/rex-durable.ts"
+  say "Installed the pi extension $pi_agent/extensions/rex-durable.ts"
+fi
+
 # A PATH for the service, so it finds lsof, fx, claude, and codex.
 service_path="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 for tool in fx claude codex; do
