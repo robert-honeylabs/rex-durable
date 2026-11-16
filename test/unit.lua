@@ -122,6 +122,47 @@ pane = M.describe({ foreground = { pid = 90000007, name = "bash", cwd = "/w" },
                     files = {}, now = 0 })
 check("describe claude running a tool", { pane.kind, pane.app, pane.id }, { "chat", "claude", uuid })
 
+-- Claude's record of its own process, ~/.claude/sessions/<pid>.json, in a throwaway home
+local home = rex.exec({ "mktemp", "-d" }).stdout:gsub("%s+$", "")
+local function put(path, text)
+  rex.exec({ "mkdir", "-p", (path:match("^(.*)/")) })
+  local f = assert(io.open(path, "wb"))
+  f:write(text)
+  f:close()
+end
+local function claude_pid(pid, id, transcript)
+  put(home .. "/.claude/sessions/" .. pid .. ".json",
+      string.format('{"pid":%d,"sessionId":"%s","cwd":"/w","status":"idle"}', pid, id))
+  if transcript then put(home .. "/.claude/projects/-w/" .. id .. ".jsonl", "{}\n") end
+end
+local function claude_tab(pid, args)
+  local p = { pid = pid, name = "claude", cwd = "/w" }
+  return M.describe({ foreground = p, ancestors = { { pid = 90000002, name = "zsh", cwd = "/w" } } },
+                    { ps = { [pid] = { age = 100, args = args } }, files = {}, now = os.time(), home = home })
+end
+local old_id, new_id = uuid, "eeeeeeee-4444-4555-8666-ffffffffffff"
+claude_pid(90000010, new_id, true)
+pane = claude_tab(90000010, "claude --resume " .. old_id)
+check("claude record beats a --resume that /clear left behind", { pane.kind, pane.id }, { "chat", new_id })
+local second_id = "abababab-4444-4555-8666-ffffffffffff"
+claude_pid(90000011, second_id, true)
+check("two claude chats in one folder each find their own",
+  { claude_tab(90000010, "claude").id, claude_tab(90000011, "claude").id }, { new_id, second_id })
+claude_pid(90000012, "12121212-4444-4555-8666-ffffffffffff", false)
+pane = claude_tab(90000012, "claude --model sonnet --resume " .. old_id)
+check("a record with no transcript yet falls back to --resume", { pane.kind, pane.id }, { "chat", old_id })
+pane = claude_tab(90000012, "claude --model sonnet")
+check("a new claude chat with nothing said comes back typed",
+  { pane.kind, pane.argv }, { "program", { "claude", "--model", "sonnet" } })
+put(home .. "/.claude/sessions/90000013.json", '{"pid":424242,"sessionId":"' .. second_id .. '"}')
+pane = claude_tab(90000013, "claude --resume " .. old_id)
+check("a record left by another process is ignored", pane.id, old_id)
+local pending = { { kind = "chat", app = "claude", cwd = "/w", pid = 90000014, argv = { "claude" } } }
+M._resolve_chats(pending, { ps = { [90000014] = { age = 3600 } }, now = os.time(), home = home,
+                            claimed = { ["claude:" .. new_id] = true, ["claude:" .. second_id] = true } })
+check("a chat never takes another chat's conversation", { pending[1].kind, pending[1].id }, { "program", nil })
+rex.exec({ "rm", "-rf", home })
+
 -- Blank sessions
 local function shell_session(cwd)
   return { windows = { { layout = { pane = { kind = "shell", cwd = cwd } } } } }

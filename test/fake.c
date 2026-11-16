@@ -4,13 +4,15 @@
  *
  *   fx      holds FAKE_HOME/.fx/sessions/v2/<id>/lock open
  *   codex   holds FAKE_HOME/.codex/sessions/.../rollout-<time>-<id>.jsonl open
- *   claude  writes FAKE_HOME/.claude/projects/<folder>/<id>.jsonl and closes it
+ *   claude  writes FAKE_HOME/.claude/projects/<folder>/<id>.jsonl and closes it,
+ *           and FAKE_HOME/.claude/sessions/<pid>.json unless FAKE_NO_RECORD is set
  *
  * Built by test/e2e.sh with -DAPP="fx" (or claude, codex) and -DFAKE_HOME.
  */
 #include <ctype.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -36,9 +38,10 @@ int main(int argc, char **argv) {
       printf("usage: %s [-r, --resume [last|<id>]]\n", app);
       return 0;
     }
-    if ((!strcmp(argv[i], "--resume") || !strcmp(argv[i], "-r") || !strcmp(argv[i], "resume")) &&
-        i + 1 < argc)
+    if ((!strcmp(argv[i], "--resume") || !strcmp(argv[i], "-r")) && i + 1 < argc)
       snprintf(id, sizeof id, "%s", argv[++i]);
+    else if (!strcmp(argv[i], "resume") && i + 1 < argc)
+      snprintf(id, sizeof id, "%s", argv[argc - 1]);
   }
   if (!id[0]) {
     if (!strcmp(app, "fx"))
@@ -76,6 +79,15 @@ int main(int argc, char **argv) {
                    "{\"type\":\"session_meta\",\"payload\":{\"id\":\"%s\",\"cwd\":\"%s\"}}\n", id, cwd);
   if (write(fd, line, (size_t)n) != n) return 1;
   if (!keep_open) close(fd);
+  if (!strcmp(app, "claude") && !getenv("FAKE_NO_RECORD")) {
+    snprintf(dir, sizeof dir, "%s/.claude/sessions", FAKE_HOME);
+    make_dirs(dir);
+    snprintf(file, sizeof file, "%s/%d.json", dir, (int)getpid());
+    FILE *record = fopen(file, "w");
+    if (!record) return 1;
+    fprintf(record, "{\"pid\":%d,\"sessionId\":\"%s\",\"cwd\":\"%s\"}\n", (int)getpid(), id, cwd);
+    fclose(record);
+  }
   printf("fake %s on %s\n", app, id);
   fflush(stdout);
   for (;;) pause();

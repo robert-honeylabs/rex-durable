@@ -112,6 +112,16 @@ local function read_json(path)
   return rex.json.decode(text)
 end
 
+-- A file a chat writes about its own process, ~/.claude/sessions/<pid>.json.
+-- It can be half-written or left behind by an earlier process with this pid.
+local function read_pid_record(path, pid)
+  local ok, record = pcall(read_json, path)
+  if ok and type(record) == "table" and tonumber(record.pid) == pid
+    and type(record.sessionId) == "string" then
+    return record
+  end
+end
+
 local function write_json(path, value)
   return write_file(path, rex.json.encode(value, { indent = true }) .. "\n")
 end
@@ -368,6 +378,11 @@ M.CHATS = {
     switches = { ["--dangerously-skip-permissions"] = true },
     optional = { ["--remote-control"] = true },
     package = "claude-code",
+    record = function(pid, home)
+      local r = read_pid_record(home .. "/.claude/sessions/" .. pid .. ".json", pid)
+      return r and { id = r.sessionId, file = home .. "/.claude/projects/" ..
+                     M.claude_slug(r.cwd) .. "/" .. r.sessionId .. ".jsonl" }
+    end,
     session_flags = { ["--resume"] = true, ["-r"] = true, ["--session-id"] = true },
     open_session = M.claude_session,
     recent = function(pane, home)
@@ -430,17 +445,31 @@ function M.is_app(app, name, argv)
   return false
 end
 
+-- Which conversation a chat process is on, most certain first: the record the
+-- chat keeps for its process (it follows /clear, unlike --resume), the session
+-- file it holds open, then a session named on its command line.
 local function chat_in(p, info)
+  local home = info.home or HOME
   local files = info.files[p.pid]
   local argv = argv_of(p.pid, info.ps[p.pid])
   local name = p.name or argv[1]
-  local id, store = M.fx_session(files)
+  local id, store = M.fx_session(files, home)
   if id then return { kind = "chat", app = "fx", id = id, store = store, argv = argv } end
   for _, app in ipairs({ "claude", "codex" }) do
     if M.is_app(app, name, argv) then
-      local found, file = M.CHATS[app].open_session(files)
-      return { kind = "chat", app = app, id = found or M.argv_session(app, argv),
-               session_file = file, argv = argv, pid = p.pid }
+      local chat = M.CHATS[app]
+      local record = chat.record and chat.record(p.pid, home)
+      local file
+      if record and file_exists(record.file) then
+        id, file = record.id, record.file
+      else
+        id, file = chat.open_session(files, home)
+        id = id or M.argv_session(app, argv)
+      end
+      if not id and record then
+        return { kind = "program", argv = argv, note = "nothing said yet" }
+      end
+      return { kind = "chat", app = app, id = id, session_file = file, argv = argv, pid = p.pid }
     end
   end
 end
@@ -467,18 +496,22 @@ function M.describe(proc, info)
 end
 
 -- A chat that keeps no session file open and named none on its command line:
--- use the newest session file for its folder written since it started. Only
--- when it is the only such chat in that folder; otherwise it isn't certain.
+-- use the newest session file for its folder written since it started, and
+-- not another chat's. Only when it is the only such chat in that folder;
+-- otherwise it isn't certain.
 local function newest_session_file(pane, info)
   local chat = M.CHATS[pane.app]
   local age = (info.ps[pane.pid] or {}).age or 0
   local since = info.now - age - 5
-  local best, best_time
-  for path, t in pairs(mtimes(chat.recent(pane, HOME, age))) do
-    if t >= since and (not best_time or t > best_time) then best, best_time = path, t end
+  local best, best_id, best_time
+  for path, t in pairs(mtimes(chat.recent(pane, info.home or HOME, age))) do
+    local id = path:match(chat.id_in_file)
+    if id and not info.claimed[pane.app .. ":" .. id] and t >= since
+      and (not best_time or t > best_time) then
+      best, best_id, best_time = path, id, t
+    end
   end
-  if not best then return nil end
-  return best:match(chat.id_in_file), best
+  return best_id, best
 end
 
 local function resolve_chats(pending, info)
@@ -529,7 +562,9 @@ local function convert(node, procs, info, pending)
   local pane = M.describe(proc, info)
   pane.block_id = node.block_id
   pane.focused = node.focused and true or false
-  if pane.kind == "chat" and not pane.id then pending[#pending + 1] = pane end
+  if pane.kind == "chat" then
+    if pane.id then info.claimed[pane.app .. ":" .. pane.id] = true else pending[#pending + 1] = pane end
+  end
   return { pane = pane }
 end
 
@@ -557,7 +592,7 @@ local function collect()
     raw[#raw + 1] = entry
   end
 
-  local info = { ps = processes(pids), files = open_files(pids), now = os.time() }
+  local info = { ps = processes(pids), files = open_files(pids), now = os.time(), claimed = {} }
   local sessions, pending = {}, {}
   for _, entry in ipairs(raw) do
     if entry.view then
@@ -1170,7 +1205,7 @@ end
 
 -- For the tests: the helpers that read processes and files.
 M._processes, M._open_files, M._held_files = processes, open_files, held_files
-M._mtimes, M._argv_of = mtimes, argv_of
+M._mtimes, M._argv_of, M._resolve_chats = mtimes, argv_of, resolve_chats
 
 if rawget(_G, "REX_DURABLE_LIB") then return M end
 main()
