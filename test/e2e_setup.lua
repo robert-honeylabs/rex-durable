@@ -33,5 +33,9 @@ assert(rex.call("session.create", { label = "agents", initial_windows = {
   { layout = tab(q(bin .. "/claude") .. " --remote-control --model opus", dir2) },
   { layout = tab("FORCE_COLOR=2 SECRET_TOKEN=hush " .. q(bin .. "/pi") ..
                  " --model openai/gpt-6-astra --thinking xhigh") },
+  -- A launcher whose system prompt is one word with spaces in it.
+  { layout = tab("MAX_THINKING_TOKENS=0 " .. q(bin .. "/claude") .. " --model sonnet --tools \"Bash\"" ..
+                 " --system-prompt \"Create Rex panes as requested. Keep replies brief.\"" ..
+                 " --remote-control \"Xenomorph\"", dir2) },
 } }))
 return "ok"
