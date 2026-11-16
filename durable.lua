@@ -43,7 +43,9 @@ local SHELLS = {
 }
 
 -- Options each chat program keeps when it reopens. Anything else on the
--- original command line, such as an internal relaunch flag, is dropped.
+-- original command line, such as an internal relaunch flag or Claude Code's
+-- --worktree (the chat already reopens inside its worktree), is dropped.
+-- `optional` options take a value only when the next word isn't an option.
 M.CHATS = {
   fx = {
     values = { ["--model"] = true, ["--effort"] = true, ["--provider"] = true,
@@ -56,13 +58,14 @@ M.CHATS = {
     values = { ["--model"] = true, ["--permission-mode"] = true, ["--add-dir"] = true,
                ["--settings"] = true, ["--agent"] = true },
     switches = { ["--dangerously-skip-permissions"] = true },
+    optional = { ["--remote-control"] = true },
   },
   codex = {
     values = { ["-m"] = true, ["--model"] = true, ["-p"] = true, ["--profile"] = true,
                ["-s"] = true, ["--sandbox"] = true, ["-a"] = true,
                ["--ask-for-approval"] = true, ["--add-dir"] = true, ["-c"] = true,
                ["--config"] = true },
-    switches = { ["--dangerously-bypass-approvals-and-sandbox"] = true,
+    switches = { ["--dangerously-bypass-approvals-and-sandbox"] = true, ["--yolo"] = true,
                  ["--search"] = true, ["--oss"] = true },
   },
 }
@@ -694,16 +697,19 @@ function M.kept_options(argv, spec)
     local a = argv[i]
     i = i + 1
     local name = a:match("^(%-%-?[%w%-]+)=") or a
-    if spec.switches[a] then
+    local optional = spec.optional and spec.optional[name]
+    if spec.switches[a] or (a ~= name and (spec.values[name] or optional)) then
       out[#out + 1] = a
-    elseif spec.values[name] then
-      if a ~= name then
-        out[#out + 1] = a
-      elseif i <= #argv then
-        out[#out + 1] = a
+    elseif optional then
+      out[#out + 1] = a
+      if argv[i] and not argv[i]:match("^%-") then
         out[#out + 1] = argv[i]
         i = i + 1
       end
+    elseif spec.values[name] and i <= #argv then
+      out[#out + 1] = a
+      out[#out + 1] = argv[i]
+      i = i + 1
     end
   end
   return out
