@@ -46,6 +46,9 @@ local UUID = "%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x
 
 local args = rex.args or {}
 local HOME = os.getenv("HOME") or ""
+local SCRIPT = args.script or (debug and debug.getinfo and debug.getinfo(1, "S").source:match("^@?(/.+)$"))
+-- Built by install.sh; see procargs.c.
+local PROCARGS = (SCRIPT and SCRIPT:match("^(.*)/") or ".") .. "/procargs"
 
 ---------------------------------------------------------------------------
 -- Small helpers
@@ -192,11 +195,6 @@ function M.parse_ps(text)
   return out
 end
 
-local function processes(pids)
-  if #pids == 0 then return {} end
-  return M.parse_ps(stdout_of({ "ps", "-o", "pid=,etime=,args=", "-p", table.concat(pids, ",") }))
-end
-
 -- lsof -F output: "p<pid>" starts a process, "n<path>" names one of its files.
 function M.parse_lsof(text)
   local out, pid = {}, nil
@@ -268,49 +266,67 @@ local function split_words(text)
   return out
 end
 
--- The exact command line on Linux; on macOS, ps's words, which is enough for
--- the options rex-durable keeps.
-local function argv_of(pid, ps)
-  if not IS_MAC then
-    local raw = read_file("/proc/" .. pid .. "/cmdline")
-    if raw and #raw > 0 then
-      local out, from = {}, 1
-      while from <= #raw do
-        local nul = raw:find("\0", from, true) or (#raw + 1)
-        out[#out + 1] = raw:sub(from, nul - 1)
-        from = nul + 1
-      end
-      if #out > 0 then return out end
-    end
-  end
-  return split_words(ps and ps.args)
+-- /proc/<pid>/cmdline and environ: words ended by NULs. Empty words are real arguments.
+local function nul_words(raw)
+  local out = {}
+  raw = raw or ""
+  if raw ~= "" and raw:sub(-1) ~= "\0" then raw = raw .. "\0" end
+  for word in raw:gmatch("([^%z]*)%z") do out[#out + 1] = word end
+  return out
 end
 
--- Each process's environment as NAME=value words. On macOS, ps -E prints it
--- after the command line, so values with spaces don't survive.
-local function environments(pids, ps)
+-- procargs output: one {"pid":N,"argv":[...],"env":[...]} per line.
+function M.parse_procargs(text)
   local out = {}
-  if IS_MAC then
-    if #pids == 0 then return out end
-    for _, line in ipairs(lines(stdout_of({ "ps", "-wwE", "-o", "pid=,args=", "-p",
-                                            table.concat(pids, ",") }))) do
-      local pid, text = line:match("^%s*(%d+)%s+(.*)$")
-      local args = pid and ps[tonumber(pid)] and ps[tonumber(pid)].args
-      if args and text:sub(1, #args) == args then
-        out[tonumber(pid)] = split_words(text:sub(#args + 1))
+  for _, line in ipairs(lines(text)) do
+    local ok, p = pcall(rex.json.decode, line)
+    if ok and type(p) == "table" and tonumber(p.pid) and type(p.argv) == "table" then
+      out[tonumber(p.pid)] = { argv = p.argv, env = list(p.env) }
+    end
+  end
+  return out
+end
+
+-- Each process's exact command line and environment: from /proc on Linux, and
+-- from procargs (built by install.sh next to durable.lua) on macOS. Without
+-- procargs, ps's words, so an option value with spaces comes back split.
+local function commands(pids, ps)
+  local out = {}
+  if not IS_MAC then
+    for _, pid in ipairs(pids) do
+      local argv = nul_words(read_file("/proc/" .. pid .. "/cmdline"))
+      if #argv > 0 then
+        out[pid] = { argv = argv, env = nul_words(read_file("/proc/" .. pid .. "/environ")) }
       end
     end
     return out
   end
-  for _, pid in ipairs(pids) do
-    local raw = read_file("/proc/" .. pid .. "/environ")
-    if raw then
-      local words = {}
-      for word in raw:gmatch("[^%z]+") do words[#words + 1] = word end
-      out[pid] = words
+  local argv = { PROCARGS }
+  for _, pid in ipairs(pids) do argv[#argv + 1] = tostring(pid) end
+  local r = file_exists(PROCARGS) and run(argv)
+  if r and r.ok then return M.parse_procargs(r.stdout) end
+  for _, line in ipairs(lines(stdout_of({ "ps", "-wwE", "-o", "pid=,args=", "-p",
+                                          table.concat(pids, ",") }))) do
+    local pid, text = line:match("^%s*(%d+)%s+(.*)$")
+    local args = pid and ps[tonumber(pid)] and ps[tonumber(pid)].args
+    if args and text:sub(1, #args) == args then
+      out[tonumber(pid)] = { argv = split_words(args), env = split_words(text:sub(#args + 1)) }
     end
   end
   return out
+end
+
+-- What each process is: its age, command line, and environment as NAME=value words.
+local function processes(pids)
+  if #pids == 0 then return {} end
+  local ps = M.parse_ps(stdout_of({ "ps", "-o", "pid=,etime=,args=", "-p", table.concat(pids, ",") }))
+  local exact = commands(pids, ps)
+  for pid, p in pairs(ps) do
+    local c = exact[pid]
+    p.argv, p.env = c and c.argv or split_words(p.args), c and c.env
+    p.args = nil
+  end
+  return ps
 end
 
 -- The tab's process chain, closest to the screen first, without login.
@@ -524,7 +540,7 @@ end
 local function chat_in(p, info)
   local home = info.home or HOME
   local files = info.files[p.pid]
-  local argv = argv_of(p.pid, info.ps[p.pid])
+  local argv = (info.ps[p.pid] or {}).argv or {}
   local name = p.name or argv[1]
   local id, store = M.fx_session(files, home)
   if id then return { kind = "chat", app = "fx", id = id, store = store, argv = argv } end
@@ -564,7 +580,7 @@ function M.describe(proc, info)
       -- The environment the shell gave the program, not what a launcher such
       -- as Codex's node wrapper passed on.
       if chat.kind == "chat" then
-        chat.env = kept_env(chat.env or (info.env and info.env[inner[#inner].pid]))
+        chat.env = kept_env(chat.env or (info.ps[inner[#inner].pid] or {}).env)
       end
       return chat
     end
@@ -572,7 +588,7 @@ function M.describe(proc, info)
   if #inner == 0 then return { kind = "shell", cwd = outer.cwd or home } end
   local top = inner[#inner]
   return { kind = "program", cwd = top.cwd or outer.cwd or home,
-           argv = argv_of(top.pid, info.ps[top.pid]) }
+           argv = (info.ps[top.pid] or {}).argv or {} }
 end
 
 -- A chat that keeps no session file open and named none on its command line:
@@ -673,8 +689,7 @@ local function collect()
   end
 
   local ps = processes(pids)
-  local info = { ps = ps, files = open_files(pids), env = environments(pids, ps),
-                 now = os.time(), claimed = {} }
+  local info = { ps = ps, files = open_files(pids), now = os.time(), claimed = {} }
   local sessions, pending = {}, {}
   for _, entry in ipairs(raw) do
     if entry.view then
@@ -1192,10 +1207,7 @@ local function status_mode()
 end
 
 local function script_path()
-  if args.script then return args.script end
-  local info = debug and debug.getinfo and debug.getinfo(1, "S")
-  local source = info and info.source or ""
-  if source:sub(1, 1) == "@" then return source:sub(2) end
+  if SCRIPT then return SCRIPT end
   error("can't tell where durable.lua is; pass script=/path/to/durable.lua", 0)
 end
 
@@ -1297,7 +1309,7 @@ end
 
 -- For the tests: the helpers that read processes and files.
 M._processes, M._open_files, M._held_files = processes, open_files, held_files
-M._mtimes, M._argv_of, M._resolve_chats = mtimes, argv_of, resolve_chats
+M._mtimes, M._resolve_chats = mtimes, resolve_chats
 
 if rawget(_G, "REX_DURABLE_LIB") then return M end
 main()

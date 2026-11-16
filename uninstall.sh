@@ -39,7 +39,7 @@ else
   fi
 fi
 
-rm -f "$data/durable.lua" "$config/rex_durable.lua" "$HOME/.pi/agent/extensions/rex-durable.ts"
+rm -f "$data/durable.lua" "$data/procargs" "$config/rex_durable.lua" "$HOME/.pi/agent/extensions/rex-durable.ts"
 rm -rf "$HOME/.pi/agent/rex-durable"
 if [ "$purge" = 1 ]; then
   rm -rf "$data" "$state"

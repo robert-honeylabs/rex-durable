@@ -78,6 +78,18 @@ mkdir -p "$data"
 cp "$here/durable.lua" "$script.new" && mv "$script.new" "$script"
 say "Installed $script"
 
+# ps loses option values with spaces on macOS; procargs reads the exact command line.
+if [ "$os" = Darwin ]; then
+  if command -v cc >/dev/null 2>&1 && cc -O2 -o "$data/procargs.new" "$here/procargs.c"; then
+    mv "$data/procargs.new" "$data/procargs"
+    say "Built $data/procargs"
+  else
+    rm -f "$data/procargs.new"
+    say "Warning: couldn't build procargs (install the Xcode command line tools: xcode-select --install)."
+    say "  Chats still reopen, but option values with spaces come back split into words."
+  fi
+fi
+
 # pi hides which conversation it's on; this extension tells rex-durable.
 pi_agent="$HOME/.pi/agent"
 if [ -d "$pi_agent" ]; then
