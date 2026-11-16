@@ -145,6 +145,10 @@ expect "first claude chat in a shared folder reopened with its options" \
   one_running "$T/bin/claude --model sonnet --dangerously-skip-permissions --remote-control hugger#4211 --resume $AGENT1"
 expect "second claude chat in that folder reopened with its options" \
   one_running "$T/bin/claude --remote-control --model opus --resume $AGENT2"
+agent_env=$(ps -wwE -o command= -p "$(pgrep -f -x "$T/bin/claude --model sonnet .* --resume $AGENT1")")
+expect "its env came back" sh -c 'case "$1" in *" FORCE_COLOR=3 "*" MAX_THINKING_TOKENS=0 "*|*" MAX_THINKING_TOKENS=0 "*" FORCE_COLOR=3 "*) ;; *) exit 1 ;; esac' sh "$agent_env "
+expect "and no env it doesn't keep" sh -c 'case "$1" in *SECRET_TOKEN*) exit 1 ;; esac' sh "$agent_env"
+expect "no unkept env in any save" sh -c "! grep -rq hush '$T/durable'"
 expect "a busy tab was waited for" grep -q 'trying again' "$T/startup.log"
 expect "second session's chat reopened once its tab was free" has_line '^side 1\.1 chat fx FXB '
 expect "program typed, not run" test "$(running "sleep 4242")" = 0

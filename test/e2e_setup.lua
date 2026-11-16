@@ -26,7 +26,8 @@ assert(rex.call("session.create", { label = "side", initial_windows = {
 } }))
 -- Two Claude Code chats in one folder, told apart by their process records.
 assert(rex.call("session.create", { label = "agents", initial_windows = {
-  { layout = tab(q(bin .. "/claude") .. " --model sonnet --dangerously-skip-permissions" ..
+  { layout = tab("FORCE_COLOR=3 MAX_THINKING_TOKENS=0 SECRET_TOKEN=hush " ..
+                 q(bin .. "/claude") .. " --model sonnet --dangerously-skip-permissions" ..
                  " --remote-control 'hugger#4211' --worktree w1", dir2) },
   { layout = tab(q(bin .. "/claude") .. " --remote-control --model opus", dir2) },
 } }))
