@@ -42,34 +42,6 @@ local SHELLS = {
   nu = true, sh = true, tcsh = true, xonsh = true, zsh = true,
 }
 
--- Options each chat program keeps when it reopens. Anything else on the
--- original command line, such as an internal relaunch flag or Claude Code's
--- --worktree (the chat already reopens inside its worktree), is dropped.
--- `optional` options take a value only when the next word isn't an option.
-M.CHATS = {
-  fx = {
-    values = { ["--model"] = true, ["--effort"] = true, ["--provider"] = true,
-               ["--add-dir"] = true, ["--context-limit"] = true },
-    switches = { ["--fast"] = true, ["--no-fast"] = true, ["--ultrafast"] = true,
-                 ["--no-ultrafast"] = true, ["--no-additional-dirs"] = true,
-                 ["--sessions-v2"] = true },
-  },
-  claude = {
-    values = { ["--model"] = true, ["--permission-mode"] = true, ["--add-dir"] = true,
-               ["--settings"] = true, ["--agent"] = true },
-    switches = { ["--dangerously-skip-permissions"] = true },
-    optional = { ["--remote-control"] = true },
-  },
-  codex = {
-    values = { ["-m"] = true, ["--model"] = true, ["-p"] = true, ["--profile"] = true,
-               ["-s"] = true, ["--sandbox"] = true, ["-a"] = true,
-               ["--ask-for-approval"] = true, ["--add-dir"] = true, ["-c"] = true,
-               ["--config"] = true },
-    switches = { ["--dangerously-bypass-approvals-and-sandbox"] = true, ["--yolo"] = true,
-                 ["--search"] = true, ["--oss"] = true },
-  },
-}
-
 local UUID = "%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x"
 
 local args = rex.args or {}
@@ -365,20 +337,78 @@ function M.claude_session(files, home)
   end
 end
 
+local function codex_cwd(path)
+  local f = io.open(path, "rb")
+  if not f then return nil end
+  local first = f:read("*l")
+  f:close()
+  local meta = first and rex.json.decode(first)
+  local payload = type(meta) == "table" and (meta.payload or meta) or {}
+  return payload.cwd
+end
+
+-- Each chat program: the options it keeps when it reopens, how to tell which
+-- conversation a running one is on, and how to reopen it. Anything else on the
+-- original command line, such as an internal relaunch flag or Claude Code's
+-- --worktree (the chat already reopens inside its worktree), is dropped.
+-- `optional` options take a value only when the next word isn't an option.
+M.CHATS = {
+  fx = {
+    values = { ["--model"] = true, ["--effort"] = true, ["--provider"] = true,
+               ["--add-dir"] = true, ["--context-limit"] = true },
+    switches = { ["--fast"] = true, ["--no-fast"] = true, ["--ultrafast"] = true,
+                 ["--no-ultrafast"] = true, ["--no-additional-dirs"] = true,
+                 ["--sessions-v2"] = true },
+    holds_session = true,
+    resume_flag = "--resume",
+  },
+  claude = {
+    values = { ["--model"] = true, ["--permission-mode"] = true, ["--add-dir"] = true,
+               ["--settings"] = true, ["--agent"] = true },
+    switches = { ["--dangerously-skip-permissions"] = true },
+    optional = { ["--remote-control"] = true },
+    package = "claude-code",
+    session_flags = { ["--resume"] = true, ["-r"] = true, ["--session-id"] = true },
+    open_session = M.claude_session,
+    recent = function(pane, home)
+      return list_dir(home .. "/.claude/projects/" .. M.claude_slug(pane.cwd), ".jsonl")
+    end,
+    id_in_file = "/(" .. UUID .. ")%.jsonl$",
+    resume_flag = "--resume",
+  },
+  codex = {
+    values = { ["-m"] = true, ["--model"] = true, ["-p"] = true, ["--profile"] = true,
+               ["-s"] = true, ["--sandbox"] = true, ["-a"] = true,
+               ["--ask-for-approval"] = true, ["--add-dir"] = true, ["-c"] = true,
+               ["--config"] = true },
+    switches = { ["--dangerously-bypass-approvals-and-sandbox"] = true, ["--yolo"] = true,
+                 ["--search"] = true, ["--oss"] = true },
+    session_flags = { resume = true },
+    open_session = M.codex_session,
+    holds_session = true,
+    recent = function(pane, home, age)
+      local out = {}
+      local minutes = tostring(math.floor(age / 60) + 2)
+      for _, path in ipairs(lines(stdout_of({ "find", home .. "/.codex/sessions", "-name",
+                                              "rollout-*.jsonl", "-mmin", "-" .. minutes }))) do
+        if codex_cwd(path) == pane.cwd then out[#out + 1] = path end
+      end
+      return out
+    end,
+    id_in_file = "%-(" .. UUID .. ")%.jsonl$",
+    subcommand = "resume",
+  },
+}
+
 -- A session ID given on the command line: `codex resume <id>`,
 -- `claude --resume <id>` or `claude --session-id <id>`.
 function M.argv_session(app, argv)
+  local flags = M.CHATS[app].session_flags or {}
   argv = list(argv)
-  for i = 1, #argv - 1 do
-    local a, b = argv[i], argv[i + 1]
-    local wanted = (app == "codex" and a == "resume")
-      or (app == "claude" and (a == "--resume" or a == "-r" or a == "--session-id"))
-    if wanted and b:match("^" .. UUID .. "$") then return b end
-  end
-  for _, a in ipairs(argv) do
-    local id = app == "claude" and (a:match("^%-%-resume=(" .. UUID .. ")$")
-      or a:match("^%-%-session%-id=(" .. UUID .. ")$"))
-    if id then return id end
+  for i, a in ipairs(argv) do
+    local flag, value = a:match("^(%-%-[%w%-]+)=(.*)$")
+    if not flag then flag, value = a, argv[i + 1] end
+    if flags[flag] and value and value:match("^" .. UUID .. "$") then return value end
   end
 end
 
@@ -390,8 +420,9 @@ function M.is_app(app, name, argv)
   if basename(argv[1]):match("^node") then
     for i = 2, math.min(#argv, 3) do
       local a = argv[i] or ""
+      local package = M.CHATS[app].package
       if basename(a) == app or a:find("/" .. app .. "/", 1, true)
-        or (app == "claude" and a:find("claude-code", 1, true)) then
+        or (package and a:find(package, 1, true)) then
         return true
       end
     end
@@ -407,8 +438,7 @@ local function chat_in(p, info)
   if id then return { kind = "chat", app = "fx", id = id, store = store, argv = argv } end
   for _, app in ipairs({ "claude", "codex" }) do
     if M.is_app(app, name, argv) then
-      local found, file
-      if app == "claude" then found, file = M.claude_session(files) else found, file = M.codex_session(files) end
+      local found, file = M.CHATS[app].open_session(files)
       return { kind = "chat", app = app, id = found or M.argv_session(app, argv),
                session_file = file, argv = argv, pid = p.pid }
     end
@@ -436,39 +466,19 @@ function M.describe(proc, info)
            argv = argv_of(top.pid, info.ps[top.pid]) }
 end
 
-local function codex_cwd(path)
-  local f = io.open(path, "rb")
-  if not f then return nil end
-  local first = f:read("*l")
-  f:close()
-  local meta = first and rex.json.decode(first)
-  local payload = type(meta) == "table" and (meta.payload or meta) or {}
-  return payload.cwd
-end
-
 -- A chat that keeps no session file open and named none on its command line:
 -- use the newest session file for its folder written since it started. Only
 -- when it is the only such chat in that folder; otherwise it isn't certain.
 local function newest_session_file(pane, info)
+  local chat = M.CHATS[pane.app]
   local age = (info.ps[pane.pid] or {}).age or 0
   local since = info.now - age - 5
-  local candidates = {}
-  if pane.app == "claude" then
-    candidates = list_dir(HOME .. "/.claude/projects/" .. M.claude_slug(pane.cwd), ".jsonl")
-  else
-    local minutes = tostring(math.floor(age / 60) + 2)
-    for _, path in ipairs(lines(stdout_of({ "find", HOME .. "/.codex/sessions", "-name",
-                                            "rollout-*.jsonl", "-mmin", "-" .. minutes }))) do
-      if codex_cwd(path) == pane.cwd then candidates[#candidates + 1] = path end
-    end
-  end
   local best, best_time
-  for path, t in pairs(mtimes(candidates)) do
+  for path, t in pairs(mtimes(chat.recent(pane, HOME, age))) do
     if t >= since and (not best_time or t > best_time) then best, best_time = path, t end
   end
   if not best then return nil end
-  if pane.app == "claude" then return best:match("/(" .. UUID .. ")%.jsonl$"), best end
-  return best:match("%-(" .. UUID .. ")%.jsonl$"), best
+  return best:match(chat.id_in_file), best
 end
 
 local function resolve_chats(pending, info)
@@ -724,11 +734,11 @@ end
 
 function M.resume_argv(pane, accepts)
   accepts = accepts or fx_accepts
+  local chat = M.CHATS[pane.app]
   local exe = chat_executable(pane)
-  local argv = { exe }
-  if pane.app == "codex" then argv[#argv + 1] = "resume" end
+  local argv = { exe, chat.subcommand }
   local has_v2 = false
-  for _, option in ipairs(M.kept_options(pane.argv, M.CHATS[pane.app])) do
+  for _, option in ipairs(M.kept_options(pane.argv, chat)) do
     if option == "--sessions-v2" then
       if accepts(exe, "--sessions-v2") and not has_v2 then
         has_v2 = true
@@ -738,14 +748,10 @@ function M.resume_argv(pane, accepts)
       argv[#argv + 1] = option
     end
   end
-  if pane.app == "fx" then
-    if pane.store == "v2" and not has_v2 and accepts(exe, "--sessions-v2") then
-      argv[#argv + 1] = "--sessions-v2"
-    end
-    argv[#argv + 1] = "--resume"
-  elseif pane.app == "claude" then
-    argv[#argv + 1] = "--resume"
+  if pane.app == "fx" and pane.store == "v2" and not has_v2 and accepts(exe, "--sessions-v2") then
+    argv[#argv + 1] = "--sessions-v2"
   end
+  argv[#argv + 1] = chat.resume_flag
   argv[#argv + 1] = pane.id
   return argv
 end
@@ -775,7 +781,7 @@ local function open_chats(saved, live)
             path = HOME .. "/.fx/sessions/" ..
               (p.store == "v2" and ("v2/" .. p.id .. "/lock") or (p.id .. "/session.lock"))
           end
-          if path and p.app ~= "claude" then
+          if path and M.CHATS[p.app].holds_session then
             paths[#paths + 1] = path
             owner[path] = p.app .. ":" .. p.id
           end
