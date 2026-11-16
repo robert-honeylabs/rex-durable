@@ -36,6 +36,14 @@ check("ps args", ps[101].args, "/usr/bin/fx --resume abc")
 check("ps age", ps[202].age, 2 * 86400 + 1)
 local files = M.parse_lsof("p101\nfcwd\nn/tmp\np202\nn/a b/c.jsonl\n")
 check("lsof files", files, { [101] = { "/tmp" }, [202] = { "/a b/c.jsonl" } })
+local exact = M.parse_procargs([[{"pid":101,"argv":["claude","--system-prompt","Keep replies \"brief\".\n"],]] ..
+  [["env":["MAX_THINKING_TOKENS=0","A=b c"]}
+not json
+{"pid":202,"argv":["sleep",""],"env":[]}
+]])
+check("procargs keeps words with spaces, quotes, and empty words", exact, {
+  [101] = { argv = { "claude", "--system-prompt", "Keep replies \"brief\".\n" }, env = { "MAX_THINKING_TOKENS=0", "A=b c" } },
+  [202] = { argv = { "sleep", "" }, env = {} } })
 
 -- Which conversation a chat is on
 check("fx v2 lock", { M.fx_session({ "/x", HOME .. "/.fx/sessions/v2/Xy7_q-Z/lock" }) }, { "Xy7_q-Z", "v2" })
@@ -122,7 +130,7 @@ local proc = {
   ancestors = { { pid = 90000002, name = "zsh", cwd = "/w" }, { pid = 90000001, name = "login" } },
 }
 local info = {
-  ps = { [90000003] = { age = 10, args = "fx --resume ID9" } },
+  ps = { [90000003] = { age = 10, argv = { "fx", "--resume", "ID9" } } },
   files = { [90000003] = { HOME .. "/.fx/sessions/v2/ID9/lock" } },
   now = os.time(),
 }
@@ -132,11 +140,12 @@ pane = M.describe({ foreground = { pid = 90000002, name = "-zsh", cwd = "/w" } }
 check("describe shell", { pane.kind, pane.cwd }, { "shell", "/w" })
 pane = M.describe({ foreground = { pid = 90000005, name = "sleep", cwd = "/w" },
                     ancestors = { { pid = 90000002, name = "zsh", cwd = "/w" } } },
-                  { ps = { [90000005] = { age = 1, args = "sleep 4242" } }, files = {}, now = 0 })
+                  { ps = { [90000005] = { age = 1, argv = { "sleep", "4242" } } }, files = {}, now = 0 })
 check("describe program", { pane.kind, pane.argv }, { "program", { "sleep", "4242" } })
 pane = M.describe({ foreground = { pid = 90000007, name = "bash", cwd = "/w" },
                     ancestors = { { pid = 90000006, name = "claude", cwd = "/w" }, { pid = 90000002, name = "zsh" } } },
-                  { ps = { [90000006] = { age = 1, args = "claude --resume " .. uuid }, [90000007] = { age = 1, args = "bash -c ls" } },
+                  { ps = { [90000006] = { age = 1, argv = { "claude", "--resume", uuid } },
+                           [90000007] = { age = 1, argv = { "bash", "-c", "ls" } } },
                     files = {}, now = 0 })
 check("describe claude running a tool", { pane.kind, pane.app, pane.id }, { "chat", "claude", uuid })
 
@@ -153,27 +162,27 @@ local function claude_pid(pid, id, transcript)
       string.format('{"pid":%d,"sessionId":"%s","cwd":"/w","status":"idle"}', pid, id))
   if transcript then put(home .. "/.claude/projects/-w/" .. id .. ".jsonl", "{}\n") end
 end
-local function claude_tab(pid, args)
+local function claude_tab(pid, argv)
   local p = { pid = pid, name = "claude", cwd = "/w" }
   return M.describe({ foreground = p, ancestors = { { pid = 90000002, name = "zsh", cwd = "/w" } } },
-                    { ps = { [pid] = { age = 100, args = args } }, files = {}, now = os.time(), home = home })
+                    { ps = { [pid] = { age = 100, argv = argv } }, files = {}, now = os.time(), home = home })
 end
 local old_id, new_id = uuid, "eeeeeeee-4444-4555-8666-ffffffffffff"
 claude_pid(90000010, new_id, true)
-pane = claude_tab(90000010, "claude --resume " .. old_id)
+pane = claude_tab(90000010, { "claude", "--resume", old_id })
 check("claude record beats a --resume that /clear left behind", { pane.kind, pane.id }, { "chat", new_id })
 local second_id = "abababab-4444-4555-8666-ffffffffffff"
 claude_pid(90000011, second_id, true)
 check("two claude chats in one folder each find their own",
-  { claude_tab(90000010, "claude").id, claude_tab(90000011, "claude").id }, { new_id, second_id })
+  { claude_tab(90000010, { "claude" }).id, claude_tab(90000011, { "claude" }).id }, { new_id, second_id })
 claude_pid(90000012, "12121212-4444-4555-8666-ffffffffffff", false)
-pane = claude_tab(90000012, "claude --model sonnet --resume " .. old_id)
+pane = claude_tab(90000012, { "claude", "--model", "sonnet", "--resume", old_id })
 check("a record with no transcript yet falls back to --resume", { pane.kind, pane.id }, { "chat", old_id })
-pane = claude_tab(90000012, "claude --model sonnet")
+pane = claude_tab(90000012, { "claude", "--model", "sonnet" })
 check("a new claude chat with nothing said comes back typed",
   { pane.kind, pane.argv }, { "program", { "claude", "--model", "sonnet" } })
 put(home .. "/.claude/sessions/90000013.json", '{"pid":424242,"sessionId":"' .. second_id .. '"}')
-pane = claude_tab(90000013, "claude --resume " .. old_id)
+pane = claude_tab(90000013, { "claude", "--resume", old_id })
 check("a record left by another process is ignored", pane.id, old_id)
 local pending = { { kind = "chat", app = "claude", cwd = "/w", pid = 90000014, argv = { "claude" } } }
 M._resolve_chats(pending, { ps = { [90000014] = { age = 3600 } }, now = os.time(), home = home,
@@ -185,8 +194,8 @@ local function pi_tab(pid, record)
   put(home .. "/.pi/agent/rex-durable/" .. pid .. ".json", rex.json.encode(record))
   return M.describe({ foreground = { pid = pid, name = "pi", cwd = "/w" },
                       ancestors = { { pid = 90000002, name = "zsh", cwd = "/w" } } },
-                    { ps = { [pid] = { age = 100, args = "pi" } }, files = {}, now = os.time(), home = home,
-                      env = { [pid] = { "PI_CODING_AGENT=true" } } })
+                    { ps = { [pid] = { age = 100, argv = { "pi" }, env = { "PI_CODING_AGENT=true" } } },
+                      files = {}, now = os.time(), home = home })
 end
 put(pi_file, "{}\n")
 pane = pi_tab(90000030, { pid = 90000030, sessionId = uuid, sessionFile = pi_file, cwd = "/w",
@@ -203,12 +212,12 @@ rex.exec({ "rm", "-rf", home })
 
 pane = M.describe({ foreground = { pid = 90000021, name = "codex", cwd = "/w" },
                     ancestors = { { pid = 90000020, name = "node", cwd = "/w" }, { pid = 90000002, name = "zsh" } } },
-                  { ps = { [90000021] = { age = 1, args = "codex resume " .. uuid },
-                           [90000020] = { age = 1, args = "node /opt/homebrew/bin/codex resume " .. uuid } },
-                    files = {}, now = 0,
-                    env = { [90000021] = { "FORCE_COLOR=0", "CODEX_MANAGED_BY_NPM=1" },
-                            [90000020] = { "FORCE_COLOR=1", "MAX_THINKING_TOKENS=0", "OPENAI_API_KEY=sk-x",
-                                           "TERM=xterm" } } })
+                  { ps = { [90000021] = { age = 1, argv = { "codex", "resume", uuid },
+                                   env = { "FORCE_COLOR=0", "CODEX_MANAGED_BY_NPM=1" } },
+                           [90000020] = { age = 1, argv = { "node", "/opt/homebrew/bin/codex", "resume", uuid },
+                                   env = { "FORCE_COLOR=1", "MAX_THINKING_TOKENS=0", "OPENAI_API_KEY=sk-x",
+                                           "TERM=xterm" } } },
+                    files = {}, now = 0 })
 local env = {}
 for name, value in pairs(pane.env) do env[#env + 1] = name .. "=" .. value end
 table.sort(env)

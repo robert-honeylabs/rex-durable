@@ -20,7 +20,11 @@ fi
 
 T=$(cd "$(mktemp -d /tmp/rex-durable-e2e.XXXXXX)" && pwd -P)
 H=$T/home
-mkdir -p "$H" "$T/bin" "$T/state" "$T/durable" "$T/my proj" "$T/two"
+mkdir -p "$H" "$T/bin" "$T/state" "$T/durable" "$T/app" "$T/my proj" "$T/two"
+# Laid out as install.sh lays it out: durable.lua with procargs beside it.
+S=$T/app/durable.lua
+cp "$here/durable.lua" "$S"
+if [ "$os" = Darwin ]; then cc -O2 -o "$T/app/procargs" "$here/procargs.c"; fi
 : >"$T/init.lua"
 SOCK="unix://$T/rex.sock"
 passed=0
@@ -28,7 +32,7 @@ failed=0
 
 clean_env() { env -u REX_SESSION -u REX_BLOCK -u REX_SERVER -u REX_CLIENT -u REX_CONFIG "$@"; }
 R() { clean_env "$REX" --autostart=false -S "$SOCK" "$@"; }
-D() { HOME="$H" R do "$here/durable.lua" "state_dir=$T/durable" notify=false "$@"; }
+D() { HOME="$H" R do "$S" "state_dir=$T/durable" notify=false "$@"; }
 show() { HOME="$H" R do "$here/test/e2e_show.lua" "state_dir=$T/durable"; }
 
 server_pid=""
@@ -198,7 +202,7 @@ echo "5. The watcher, kept running like a login service, brings programs back by
 touch "$T/supervise"
 (
   while [ -e "$T/supervise" ]; do
-    HOME="$H" R do "$here/durable.lua" --all mode=watch "rex=$REX" "script=$here/durable.lua" \
+    HOME="$H" R do "$S" --all mode=watch "rex=$REX" "script=$S" \
       "server=$SOCK" "state_dir=$T/durable" notify=false >>"$T/watch.log" 2>&1 || true
     sleep 1
   done
@@ -232,7 +236,7 @@ wait "$watch_pid" 2>/dev/null || true
 watch_pid=""
 
 echo "6. The command palette actions load"
-sed -e "s|@REX@|$REX|" -e "s|@SCRIPT@|$here/durable.lua|" "$here/rex_durable.lua" >"$T/rex_durable.lua"
+sed -e "s|@REX@|$REX|" -e "s|@SCRIPT@|$S|" "$here/rex_durable.lua" >"$T/rex_durable.lua"
 printf 'package.path = "%s/?.lua;" .. package.path\nrequire("rex_durable")\n' "$T" >"$T/check.lua"
 expect "rex config check passes" sh -c "'$REX' config check '$T/check.lua' >'$T/check.log' 2>&1"
 

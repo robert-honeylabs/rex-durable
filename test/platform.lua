@@ -48,8 +48,8 @@ os.execute("sleep 1")
 
 print("system: " .. M.OS .. ", lsof " .. (rex.exec({ "lsof", "-v" }) and "installed" or "not installed"))
 local ps = M._processes({ pid })[pid]
-check("ps reads the command line and age", ps and ps.args == "sleep 4243" and ps.age >= 0, ps and ps.args)
-local argv = M._argv_of(pid, ps)
+local argv = ps and ps.argv or {}
+check("ps reads the age", ps and ps.age >= 0)
 check("exact argv", argv[1] == "sleep" and argv[2] == "4243" and #argv == 2, table.concat(argv, "|"))
 local files = M._open_files({ pid })[pid] or {}
 local seen = false
