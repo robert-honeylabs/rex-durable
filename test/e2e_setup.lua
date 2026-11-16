@@ -24,11 +24,14 @@ assert(rex.call("session.create", { label = "work", initial_windows = {
 assert(rex.call("session.create", { label = "side", initial_windows = {
   { layout = tab(q(bin .. "/fx") .. " --resume FXB") },
 } }))
--- Two Claude Code chats in one folder, told apart by their process records.
+-- Two Claude Code chats in one folder, told apart by their process records,
+-- and a pi chat.
 assert(rex.call("session.create", { label = "agents", initial_windows = {
   { layout = tab("FORCE_COLOR=3 MAX_THINKING_TOKENS=0 SECRET_TOKEN=hush " ..
                  q(bin .. "/claude") .. " --model sonnet --dangerously-skip-permissions" ..
                  " --remote-control 'hugger#4211' --worktree w1", dir2) },
   { layout = tab(q(bin .. "/claude") .. " --remote-control --model opus", dir2) },
+  { layout = tab("FORCE_COLOR=2 SECRET_TOKEN=hush " .. q(bin .. "/pi") ..
+                 " --model openai/gpt-6-astra --thinking xhigh") },
 } }))
 return "ok"

@@ -7,7 +7,7 @@ them back when it starts again. The programs that were running in them don't
 come back: every tab returns as an empty shell. rex-durable remembers what was
 running in each tab and puts it back after a restart:
 
-  * fx, Claude Code, and Codex chats reopen on their own conversation.
+  * fx, Claude Code, Codex, and pi chats reopen on their own conversation.
   * Any other program is typed at the prompt but not run. You press Enter.
   * Plain shells are left alone.
 
@@ -112,7 +112,7 @@ local function read_json(path)
   return rex.json.decode(text)
 end
 
--- A file a chat writes about its own process, ~/.claude/sessions/<pid>.json.
+-- A file a chat writes about its own process, such as ~/.claude/sessions/<pid>.json.
 -- It can be half-written or left behind by an earlier process with this pid.
 local function read_pid_record(path, pid)
   local ok, record = pcall(read_json, path)
@@ -333,7 +333,7 @@ local function is_shell(p)
 end
 
 ---------------------------------------------------------------------------
--- Chats: which conversation a running fx, Claude Code, or Codex is on
+-- Chats: which conversation a running fx, Claude Code, Codex, or pi is on
 
 local function under(path, dir)
   return path:sub(1, #dir) == dir and path:sub(#dir + 1) or nil
@@ -457,17 +457,46 @@ M.CHATS = {
     id_in_file = "%-(" .. UUID .. ")%.jsonl$",
     subcommand = "resume",
   },
+  pi = {
+    values = { ["--provider"] = true, ["--model"] = true, ["--thinking"] = true,
+               ["--models"] = true, ["--tools"] = true, ["-t"] = true,
+               ["--exclude-tools"] = true, ["-xt"] = true, ["--extension"] = true,
+               ["-e"] = true, ["--skill"] = true, ["--session-dir"] = true },
+    switches = { ["--approve"] = true, ["-a"] = true, ["--offline"] = true,
+                 ["--no-tools"] = true, ["-nt"] = true, ["--no-builtin-tools"] = true,
+                 ["-nbt"] = true, ["--no-extensions"] = true, ["-ne"] = true,
+                 ["--no-mcp"] = true, ["--no-skills"] = true, ["-ns"] = true,
+                 ["--no-context-files"] = true, ["-nc"] = true },
+    package = "pi-coding-agent",
+    -- Written by pi/rex-durable.ts. pi's process title hides its command line
+    -- and environment from ps, so the record carries them.
+    record = function(pid, home)
+      local r = read_pid_record(home .. "/.pi/agent/rex-durable/" .. pid .. ".json", pid)
+      return r and { id = r.sessionId, file = r.sessionFile, argv = r.argv, env = r.env }
+    end,
+    session_flags = { ["--session"] = true, ["--session-id"] = true },
+    session_value = "^[^%-]",
+    open_session = function() end,
+    recent = function(pane, home)
+      local folder = tostring(pane.cwd):gsub("^/", ""):gsub("[/\\:]", "-")
+      return list_dir(home .. "/.pi/agent/sessions/--" .. folder .. "--", ".jsonl")
+    end,
+    id_in_file = "_(" .. UUID .. ")%.jsonl$",
+    resume_flag = "--session",
+    resume_by_file = true,
+  },
 }
 
 -- A session ID given on the command line: `codex resume <id>`,
 -- `claude --resume <id>` or `claude --session-id <id>`.
 function M.argv_session(app, argv)
-  local flags = M.CHATS[app].session_flags or {}
+  local chat = M.CHATS[app]
+  local flags, wanted = chat.session_flags or {}, chat.session_value or ("^" .. UUID .. "$")
   argv = list(argv)
   for i, a in ipairs(argv) do
     local flag, value = a:match("^(%-%-[%w%-]+)=(.*)$")
     if not flag then flag, value = a, argv[i + 1] end
-    if flags[flag] and value and value:match("^" .. UUID .. "$") then return value end
+    if flags[flag] and value and value:match(wanted) then return value end
   end
 end
 
@@ -499,12 +528,13 @@ local function chat_in(p, info)
   local name = p.name or argv[1]
   local id, store = M.fx_session(files, home)
   if id then return { kind = "chat", app = "fx", id = id, store = store, argv = argv } end
-  for _, app in ipairs({ "claude", "codex" }) do
+  for _, app in ipairs({ "claude", "codex", "pi" }) do
     if M.is_app(app, name, argv) then
       local chat = M.CHATS[app]
       local record = chat.record and chat.record(p.pid, home)
       local file
-      if record and file_exists(record.file) then
+      if record and record.argv then argv = list(record.argv) end
+      if record and record.file and file_exists(record.file) then
         id, file = record.id, record.file
       else
         id, file = chat.open_session(files, home)
@@ -513,7 +543,8 @@ local function chat_in(p, info)
       if not id and record then
         return { kind = "program", argv = argv, note = "nothing said yet" }
       end
-      return { kind = "chat", app = app, id = id, session_file = file, argv = argv, pid = p.pid }
+      return { kind = "chat", app = app, id = id, session_file = file, argv = argv, pid = p.pid,
+               env = record and record.env }
     end
   end
 end
@@ -532,7 +563,9 @@ function M.describe(proc, info)
       chat.cwd = p.cwd or outer.cwd or home
       -- The environment the shell gave the program, not what a launcher such
       -- as Codex's node wrapper passed on.
-      if chat.kind == "chat" then chat.env = kept_env(info.env and info.env[inner[#inner].pid]) end
+      if chat.kind == "chat" then
+        chat.env = kept_env(chat.env or (info.env and info.env[inner[#inner].pid]))
+      end
       return chat
     end
   end
@@ -762,7 +795,7 @@ function M.summary(snap)
     end
   end
   local parts = {}
-  for _, app in ipairs({ "fx", "claude", "codex" }) do
+  for _, app in ipairs({ "fx", "claude", "codex", "pi" }) do
     if apps[app] then parts[#parts + 1] = apps[app] .. " " .. app end
   end
   local text = string.format("%d sessions, %d tabs, %d chats", sessions, tabs, chats)
@@ -836,7 +869,7 @@ function M.resume_argv(pane, accepts)
     argv[#argv + 1] = "--sessions-v2"
   end
   argv[#argv + 1] = chat.resume_flag
-  argv[#argv + 1] = pane.id
+  argv[#argv + 1] = chat.resume_by_file and pane.session_file or pane.id
   return argv
 end
 
