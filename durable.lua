@@ -286,6 +286,33 @@ local function argv_of(pid, ps)
   return split_words(ps and ps.args)
 end
 
+-- Each process's environment as NAME=value words. On macOS, ps -E prints it
+-- after the command line, so values with spaces don't survive.
+local function environments(pids, ps)
+  local out = {}
+  if IS_MAC then
+    if #pids == 0 then return out end
+    for _, line in ipairs(lines(stdout_of({ "ps", "-wwE", "-o", "pid=,args=", "-p",
+                                            table.concat(pids, ",") }))) do
+      local pid, text = line:match("^%s*(%d+)%s+(.*)$")
+      local args = pid and ps[tonumber(pid)] and ps[tonumber(pid)].args
+      if args and text:sub(1, #args) == args then
+        out[tonumber(pid)] = split_words(text:sub(#args + 1))
+      end
+    end
+    return out
+  end
+  for _, pid in ipairs(pids) do
+    local raw = read_file("/proc/" .. pid .. "/environ")
+    if raw then
+      local words = {}
+      for word in raw:gmatch("[^%z]+") do words[#words + 1] = word end
+      out[pid] = words
+    end
+  end
+  return out
+end
+
 -- The tab's process chain, closest to the screen first, without login.
 function M.chain_of(proc)
   local out, seen, candidates = {}, {}, {}
@@ -355,6 +382,23 @@ local function codex_cwd(path)
   local meta = first and rex.json.decode(first)
   local payload = type(meta) == "table" and (meta.payload or meta) or {}
   return payload.cwd
+end
+
+-- Environment variables a chat keeps when it reopens, such as FORCE_COLOR=1
+-- typed in front of it. No other variable is ever saved.
+M.ENV = { "FORCE_COLOR", "MAX_THINKING_TOKENS" }
+
+local function kept_env(words)
+  local wanted, out = {}, nil
+  for _, name in ipairs(M.ENV) do wanted[name] = true end
+  for _, word in ipairs(list(words)) do
+    local name, value = word:match("^([%w_]+)=(.*)$")
+    if name and wanted[name] then
+      out = out or {}
+      out[name] = value
+    end
+  end
+  return out
 end
 
 -- Each chat program: the options it keeps when it reopens, how to tell which
@@ -486,6 +530,9 @@ function M.describe(proc, info)
     local chat = chat_in(p, info)
     if chat then
       chat.cwd = p.cwd or outer.cwd or home
+      -- The environment the shell gave the program, not what a launcher such
+      -- as Codex's node wrapper passed on.
+      if chat.kind == "chat" then chat.env = kept_env(info.env and info.env[inner[#inner].pid]) end
       return chat
     end
   end
@@ -592,7 +639,9 @@ local function collect()
     raw[#raw + 1] = entry
   end
 
-  local info = { ps = processes(pids), files = open_files(pids), now = os.time(), claimed = {} }
+  local ps = processes(pids)
+  local info = { ps = ps, files = open_files(pids), env = environments(pids, ps),
+                 now = os.time(), claimed = {} }
   local sessions, pending = {}, {}
   for _, entry in ipairs(raw) do
     if entry.view then
@@ -792,9 +841,19 @@ function M.resume_argv(pane, accepts)
 end
 
 local function command_for(pane)
-  if pane.kind == "chat" then return M.join(M.resume_argv(pane)) .. "\n" end
+  if pane.kind == "chat" then
+    local words = {}
+    for _, name in ipairs(M.ENV) do
+      local value = type(pane.env) == "table" and pane.env[name]
+      if value then words[#words + 1] = name .. "=" .. M.quote(value) end
+    end
+    table.sort(words)
+    for _, word in ipairs(M.resume_argv(pane)) do words[#words + 1] = M.quote(word) end
+    return table.concat(words, " ") .. "\n"
+  end
   if pane.kind == "program" and #list(pane.argv) > 0 then return M.join(pane.argv) end
 end
+M.command_for = command_for
 
 -- Chats already running, in Rex or anywhere else, so none is opened twice.
 local function open_chats(saved, live)

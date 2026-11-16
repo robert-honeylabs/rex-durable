@@ -96,6 +96,13 @@ check("codex keeps --yolo",
   cmd({ app = "codex", id = uuid,
         argv = { "codex", "--yolo", "--model", "gpt-6", "-c", "model_reasoning_effort=medium" } }),
   "codex resume --yolo --model gpt-6 -c model_reasoning_effort=medium " .. uuid)
+check("env typed in front of a chat, sorted, only kept names",
+  M.command_for({ kind = "chat", app = "codex", id = uuid, argv = { "codex", "--yolo" },
+                  env = { MAX_THINKING_TOKENS = "0", FORCE_COLOR = "1", OPENAI_API_KEY = "sk-x" } }),
+  "FORCE_COLOR=1 MAX_THINKING_TOKENS=0 codex resume --yolo " .. uuid .. "\n")
+check("no env, no prefix",
+  M.command_for({ kind = "chat", app = "claude", id = uuid, argv = { "claude" } }),
+  "claude --resume " .. uuid .. "\n")
 check("quote spaces", M.join({ "cd", "/a b/it's" }), "cd '/a b/it'\\''s'")
 
 -- What a tab runs (process IDs above any real pid_max, so /proc never answers)
@@ -162,6 +169,20 @@ M._resolve_chats(pending, { ps = { [90000014] = { age = 3600 } }, now = os.time(
                             claimed = { ["claude:" .. new_id] = true, ["claude:" .. second_id] = true } })
 check("a chat never takes another chat's conversation", { pending[1].kind, pending[1].id }, { "program", nil })
 rex.exec({ "rm", "-rf", home })
+
+pane = M.describe({ foreground = { pid = 90000021, name = "codex", cwd = "/w" },
+                    ancestors = { { pid = 90000020, name = "node", cwd = "/w" }, { pid = 90000002, name = "zsh" } } },
+                  { ps = { [90000021] = { age = 1, args = "codex resume " .. uuid },
+                           [90000020] = { age = 1, args = "node /opt/homebrew/bin/codex resume " .. uuid } },
+                    files = {}, now = 0,
+                    env = { [90000021] = { "FORCE_COLOR=0", "CODEX_MANAGED_BY_NPM=1" },
+                            [90000020] = { "FORCE_COLOR=1", "MAX_THINKING_TOKENS=0", "OPENAI_API_KEY=sk-x",
+                                           "TERM=xterm" } } })
+local env = {}
+for name, value in pairs(pane.env) do env[#env + 1] = name .. "=" .. value end
+table.sort(env)
+check("a chat keeps only the allowed env its shell gave it",
+  { pane.app, env }, { "codex", { "FORCE_COLOR=1", "MAX_THINKING_TOKENS=0" } })
 
 -- Blank sessions
 local function shell_session(cwd)
