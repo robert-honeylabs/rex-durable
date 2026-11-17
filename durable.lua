@@ -7,7 +7,7 @@ them back when it starts again. The programs that were running in them don't
 come back: every tab returns as an empty shell. rex-durable remembers what was
 running in each tab and puts it back after a restart:
 
-  * fx, Claude Code, Codex, and pi chats reopen on their own conversation.
+  * fx, Claude Code, Codex, pi, and omp chats reopen on their own conversation.
   * Any other program is typed at the prompt but not run. You press Enter.
   * Plain shells are left alone.
 
@@ -349,7 +349,7 @@ local function is_shell(p)
 end
 
 ---------------------------------------------------------------------------
--- Chats: which conversation a running fx, Claude Code, Codex, or pi is on
+-- Chats: which conversation a running fx, Claude Code, Codex, pi, or omp is on
 
 local function under(path, dir)
   return path:sub(1, #dir) == dir and path:sub(#dir + 1) or nil
@@ -415,6 +415,47 @@ local function kept_env(words)
     end
   end
   return out
+end
+
+-- Written by extension/rex-durable.ts into ~/.pi/agent or ~/.omp/agent. pi's
+-- process title hides its command line and environment from ps, so the
+-- record carries them.
+local function extension_record(agent)
+  return function(pid, home)
+    local r = read_pid_record(home .. "/" .. agent .. "/rex-durable/" .. pid .. ".json", pid)
+    return r and { id = r.sessionId, file = r.sessionFile, argv = r.argv, env = r.env }
+  end
+end
+
+local function relative_to(dir, path)
+  dir = dir:gsub("/+$", "")
+  if path == dir then return "" end
+  if dir ~= "" and path:sub(1, #dir + 1) == dir .. "/" then return path:sub(#dir + 2) end
+end
+
+-- omp keeps a folder's sessions in ~/.omp/agent/sessions/<folder>, named
+-- -tmp-<path> under the temporary directory, -<path> under home, and
+-- --<path>-- elsewhere, with / and : as -.
+function M.omp_folder(cwd, home, tmp)
+  cwd = tostring(cwd or "")
+  local function dashed(s) return (s:gsub("[/\\:]", "-")) end
+  local rel = tmp and relative_to(tmp, cwd)
+  if rel then return rel == "" and "-tmp" or "-tmp-" .. dashed(rel) end
+  rel = relative_to(home, cwd)
+  if rel then return "-" .. dashed(rel) end
+  return "--" .. dashed((cwd:gsub("^/", ""))) .. "--"
+end
+
+-- omp compares real paths, and macOS's TMPDIR is a symlink under /var.
+local tmpdir
+local function real_tmpdir()
+  if tmpdir == nil then
+    local dir = os.getenv("TMPDIR") or "/tmp"
+    local r = run({ "realpath", dir })
+    local real = r and r.ok and r.stdout:gsub("%s+$", "")
+    tmpdir = (real and real ~= "") and real or dir
+  end
+  return tmpdir
 end
 
 -- Each chat program: the options it keeps when it reopens, how to tell which
@@ -488,12 +529,7 @@ M.CHATS = {
                  ["--no-mcp"] = true, ["--no-skills"] = true, ["-ns"] = true,
                  ["--no-context-files"] = true, ["-nc"] = true },
     package = "pi-coding-agent",
-    -- Written by extension/rex-durable.ts. pi's process title hides its command line
-    -- and environment from ps, so the record carries them.
-    record = function(pid, home)
-      local r = read_pid_record(home .. "/.pi/agent/rex-durable/" .. pid .. ".json", pid)
-      return r and { id = r.sessionId, file = r.sessionFile, argv = r.argv, env = r.env }
-    end,
+    record = extension_record(".pi/agent"),
     session_flags = { ["--session"] = true, ["--session-id"] = true },
     session_value = "^[^%-]",
     open_session = function() end,
@@ -505,7 +541,38 @@ M.CHATS = {
     resume_flag = "--session",
     resume_by_file = true,
   },
+  omp = {
+    values = { ["--model"] = true, ["--smol"] = true, ["--slow"] = true, ["--plan"] = true,
+               ["--provider"] = true, ["--system-prompt"] = true,
+               ["--system-prompt-template"] = true, ["--append-system-prompt"] = true,
+               ["--profile"] = true, ["--config"] = true, ["--add-dir"] = true,
+               ["--session-dir"] = true, ["--models"] = true, ["--tools"] = true,
+               ["--thinking"] = true, ["--service-tier"] = true, ["--hook"] = true,
+               ["-e"] = true, ["--extension"] = true, ["--skills"] = true,
+               ["--approval-mode"] = true, ["--prewalk-into"] = true },
+    switches = { ["--allow-home"] = true, ["--no-tools"] = true, ["--no-judge"] = true,
+                 ["--no-spotlight"] = true, ["--offline"] = true, ["--no-lsp"] = true,
+                 ["--no-pty"] = true, ["--hide-thinking"] = true, ["--advisor"] = true,
+                 ["--external-thinking"] = true, ["--no-extensions"] = true,
+                 ["--no-skills"] = true, ["--no-rules"] = true, ["--no-context-files"] = true,
+                 ["--no-title"] = true, ["--auto-approve"] = true, ["--prewalk"] = true,
+                 ["--no-prewalk"] = true },
+    record = extension_record(".omp/agent"),
+    session_flags = { ["--resume"] = true, ["-r"] = true },
+    session_value = "^[^%-]",
+    open_session = function() end,
+    recent = function(pane, home)
+      return list_dir(home .. "/.omp/agent/sessions/" .. M.omp_folder(pane.cwd, home,
+                                                                       real_tmpdir()), ".jsonl")
+    end,
+    id_in_file = "_(" .. UUID .. ")%.jsonl$",
+    resume_flag = "--resume",
+    resume_by_file = true,
+  },
 }
+
+-- Chat programs in the order they're looked for and listed.
+M.APPS = { "fx", "claude", "codex", "pi", "omp" }
 
 -- A session ID given on the command line: `codex resume <id>`,
 -- `claude --resume <id>` or `claude --session-id <id>`.
@@ -548,8 +615,8 @@ local function chat_in(p, info)
   local name = p.name or argv[1]
   local id, store = M.fx_session(files, home)
   if id then return { kind = "chat", app = "fx", id = id, store = store, argv = argv } end
-  for _, app in ipairs({ "claude", "codex", "pi" }) do
-    if M.is_app(app, name, argv) then
+  for _, app in ipairs(M.APPS) do
+    if M.CHATS[app].open_session and M.is_app(app, name, argv) then
       local chat = M.CHATS[app]
       local record = chat.record and chat.record(p.pid, home)
       local file
@@ -814,7 +881,7 @@ function M.summary(snap)
     end
   end
   local parts = {}
-  for _, app in ipairs({ "fx", "claude", "codex", "pi" }) do
+  for _, app in ipairs(M.APPS) do
     if apps[app] then parts[#parts + 1] = apps[app] .. " " .. app end
   end
   local text = string.format("%d sessions, %d tabs, %d chats", sessions, tabs, chats)
