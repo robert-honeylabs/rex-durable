@@ -66,6 +66,19 @@ check("pi via node", M.is_app("pi", "node",
   { "node", "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js" }), true)
 check("pi --session", M.argv_session("pi", { "pi", "--session", "01a1e57d" }), "01a1e57d")
 check("pi --session-id=", M.argv_session("pi", { "pi", "--session-id=abc" }), "abc")
+check("omp by name", M.is_app("omp", "omp", { "omp" }), true)
+check("omp --resume", M.argv_session("omp", { "omp", "--model", "m", "--resume", "01a1e8a0" }), "01a1e8a0")
+check("omp -r", M.argv_session("omp", { "omp", "-r", "/s/t_x.jsonl" }), "/s/t_x.jsonl")
+check("omp --resume with no ID picks one, so it names none",
+  M.argv_session("omp", { "omp", "--resume", "--model", "m" }), nil)
+check("omp folders under home, the temporary directory, and elsewhere",
+  { M.omp_folder("/Users/me", "/Users/me", "/private/var/T"),
+    M.omp_folder("/Users/me/Projects/a.b/.claude/x", "/Users/me", "/private/var/T"),
+    M.omp_folder("/private/var/T/a/b", "/Users/me", "/private/var/T"),
+    M.omp_folder("/private/var/T", "/Users/me", "/private/var/T"),
+    M.omp_folder("/srv/my app", "/Users/me", "/private/var/T"),
+    M.omp_folder("/Users/meme", "/Users/me", nil) },
+  { "-", "-Projects-a.b-.claude-x", "-tmp-a-b", "-tmp", "--srv-my app--", "--Users-meme--" })
 check("not claude", M.is_app("claude", "node", { "node", "server.js" }), false)
 
 -- Commands that reopen a chat
@@ -122,6 +135,12 @@ check("pi reopens its session file with its options",
   "pi --model openai/gpt-6-astra --thinking xhigh --session '/h/.pi/agent/sessions/--my proj--/t_" .. uuid .. ".jsonl'")
 check("pi without a session file reopens by ID",
   cmd({ app = "pi", id = "01a1e57d", argv = { "pi", "--session", "01a1e57d" } }), "pi --session 01a1e57d")
+check("omp reopens its session file with its options",
+  cmd({ app = "omp", id = uuid, session_file = "/h/.omp/agent/sessions/-p/t_" .. uuid .. ".jsonl",
+        argv = { "omp", "--model", "openai-codex/gpt-5.6-luna", "--append-system-prompt", "two words",
+                 "--api-key", "sk-x", "--no-lsp", "-p", "--resume", "old" } }),
+  "omp --model openai-codex/gpt-5.6-luna --append-system-prompt 'two words' --no-lsp --resume " ..
+  "/h/.omp/agent/sessions/-p/t_" .. uuid .. ".jsonl")
 check("quote spaces", M.join({ "cd", "/a b/it's" }), "cd '/a b/it'\\''s'")
 
 -- What a tab runs (process IDs above any real pid_max, so /proc never answers)
@@ -229,6 +248,25 @@ pane = pi_tab(90000031, { pid = 90000031, sessionId = "01a1e57d-1290-713b-b0a2-f
                           argv = { "pi", "--no-session", "--model", "m" }, env = {} })
 check("pi with no session file comes back typed",
   { pane.kind, pane.argv }, { "program", { "pi", "--no-session", "--model", "m" } })
+-- omp's record comes from the same extension, under ~/.omp/agent
+local omp_file = home .. "/.omp/agent/sessions/--w--/2026-11-17T08-29-30-298Z_" .. uuid .. ".jsonl"
+put(omp_file, "{}\n")
+put(home .. "/.omp/agent/rex-durable/90000032.json", rex.json.encode({
+  pid = 90000032, sessionId = uuid, sessionFile = omp_file, cwd = "/w",
+  argv = { "omp", "--system-prompt", "Keep replies brief." }, env = { "MAX_THINKING_TOKENS=0" } }))
+pane = M.describe({ foreground = { pid = 90000032, name = "omp", cwd = "/w" },
+                    ancestors = { { pid = 90000002, name = "zsh", cwd = "/w" } } },
+                  { ps = { [90000032] = { age = 100, argv = { "omp" }, env = {} } },
+                    files = {}, now = os.time(), home = home })
+check("omp chat from its record, with its options and env",
+  { pane.kind, pane.app, pane.id, M.command_for(pane) },
+  { "chat", "omp", uuid,
+    "MAX_THINKING_TOKENS=0 omp --system-prompt 'Keep replies brief.' --resume " .. omp_file .. "\n" })
+pending = { { kind = "chat", app = "omp", cwd = "/w", pid = 90000033, argv = { "omp" } } }
+M._resolve_chats(pending, { ps = { [90000033] = { age = 3600 } }, now = os.time(), home = home,
+                            claimed = {} })
+check("omp with no record takes the newest session file in its folder",
+  { pending[1].kind, pending[1].id, pending[1].session_file }, { "chat", uuid, omp_file })
 rex.exec({ "rm", "-rf", home })
 
 pane = M.describe({ foreground = { pid = 90000021, name = "codex", cwd = "/w" },

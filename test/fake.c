@@ -1,5 +1,5 @@
 /*
- * A stand-in for fx, Claude Code, Codex, or pi in the end-to-end test. It keeps
+ * A stand-in for fx, Claude Code, Codex, pi, or omp in the end-to-end test. It keeps
  * its conversation's file the way the real program does, then waits:
  *
  *   fx      holds FAKE_HOME/.fx/sessions/v2/<id>/lock open
@@ -8,10 +8,11 @@
  *           and FAKE_HOME/.claude/sessions/<pid>.json unless FAKE_NO_RECORD is set
  *   pi      writes FAKE_HOME/.pi/agent/sessions/--<folder>--/<time>_<id>.jsonl and
  *           closes it, and FAKE_HOME/.pi/agent/rex-durable/<pid>.json the way
- *           extension/rex-durable.ts does, with its command line and FORCE_COLOR and
- *           SECRET_TOKEN from its environment
+ *           extension/rex-durable.ts does, with its command line and FORCE_COLOR,
+ *           MAX_THINKING_TOKENS, and SECRET_TOKEN from its environment
+ *   omp     does what pi does under FAKE_HOME/.omp/agent
  *
- * Built by test/e2e.sh with -DAPP="fx" (or claude, codex, pi) and -DFAKE_HOME.
+ * Built by test/e2e.sh with -DAPP="fx" (or claude, codex, pi, omp) and -DFAKE_HOME.
  */
 #include <ctype.h>
 #include <fcntl.h>
@@ -36,6 +37,7 @@ static void make_dirs(const char *path) {
 
 int main(int argc, char **argv) {
   const char *app = APP;
+  const char *agent = !strcmp(app, "pi") ? ".pi/agent" : !strcmp(app, "omp") ? ".omp/agent" : NULL;
   char id[4096] = "";
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--help")) {
@@ -49,9 +51,9 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[i], "--session") && i + 1 < argc)
       snprintf(id, sizeof id, "%s", argv[++i]);
   }
-  /* pi reopens by file: .../<time>_<id>.jsonl */
+  /* pi and omp reopen by file: .../<time>_<id>.jsonl */
   char *from = strrchr(id, '_'), *dot = strstr(id, ".jsonl");
-  if (!strcmp(app, "pi") && from && dot) {
+  if (agent && from && dot) {
     *dot = 0;
     memmove(id, from + 1, strlen(from + 1) + 1);
   }
@@ -59,7 +61,7 @@ int main(int argc, char **argv) {
     if (!strcmp(app, "fx"))
       snprintf(id, sizeof id, "new%d", (int)getpid());
     else
-      snprintf(id, sizeof id, "00000000-0000-%d000-8000-%012d", strcmp(app, "pi") ? 4 : 7, (int)getpid());
+      snprintf(id, sizeof id, "00000000-0000-%d000-8000-%012d", agent ? 7 : 4, (int)getpid());
   }
 
   char cwd[2048], dir[4096], file[4608];
@@ -71,12 +73,12 @@ int main(int argc, char **argv) {
   } else if (!strcmp(app, "codex")) {
     snprintf(dir, sizeof dir, "%s/.codex/sessions/2026/11/13", FAKE_HOME);
     snprintf(file, sizeof file, "%s/rollout-2026-11-13T10-00-00-%s.jsonl", dir, id);
-  } else if (!strcmp(app, "pi")) {
+  } else if (agent) {
     char slug[2048];
     snprintf(slug, sizeof slug, "%s", cwd + 1);
     for (char *p = slug; *p; p++)
       if (*p == '/') *p = '-';
-    snprintf(dir, sizeof dir, "%s/.pi/agent/sessions/--%s--", FAKE_HOME, slug);
+    snprintf(dir, sizeof dir, "%s/%s/sessions/--%s--", FAKE_HOME, agent, slug);
     snprintf(file, sizeof file, "%s/2026-11-13T10-00-00-000Z_%s.jsonl", dir, id);
     keep_open = 0;
   } else {
@@ -108,9 +110,9 @@ int main(int argc, char **argv) {
     fprintf(record, "{\"pid\":%d,\"sessionId\":\"%s\",\"cwd\":\"%s\"}\n", (int)getpid(), id, cwd);
     fclose(record);
   }
-  if (!strcmp(app, "pi")) {
+  if (agent) {
     char records[4096], path[4608];
-    snprintf(records, sizeof records, "%s/.pi/agent/rex-durable", FAKE_HOME);
+    snprintf(records, sizeof records, "%s/%s/rex-durable", FAKE_HOME, agent);
     make_dirs(records);
     snprintf(path, sizeof path, "%s/%d.json", records, (int)getpid());
     FILE *record = fopen(path, "w");
@@ -119,9 +121,9 @@ int main(int argc, char **argv) {
             (int)getpid(), id, file, cwd);
     for (int i = 0; i < argc; i++) fprintf(record, "%s\"%s\"", i ? "," : "", argv[i]);
     fprintf(record, "],\"env\":[");
-    const char *names[] = {"FORCE_COLOR", "SECRET_TOKEN"};
+    const char *names[] = {"FORCE_COLOR", "MAX_THINKING_TOKENS", "SECRET_TOKEN"};
     int first = 1;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
       const char *value = getenv(names[i]);
       if (!value) continue;
       fprintf(record, "%s\"%s=%s\"", first ? "" : ",", names[i], value);

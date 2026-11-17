@@ -6,7 +6,7 @@
 #   REX=/path/to/rex test/e2e.sh
 #
 # It runs its own Rex server on its own socket and state folder, with fake
-# fx, Claude Code, Codex, and pi chats that keep their files in a throwaway home
+# fx, Claude Code, Codex, pi, and omp chats that keep their files in a throwaway home
 # folder. It never connects to your own Rex server or touches your real chats,
 # and it stops only the server it started, by its process ID.
 set -euo pipefail
@@ -102,7 +102,7 @@ contains() { # text, fixed strings...
 # The block ID of a tab in a listing: block LISTING SESSION WINDOW.PANE
 block() { printf '%s\n' "$1" | awk -v s="$2" -v tab="$3" '$1 == s && $2 == tab { print $NF }'; }
 
-for app in fx claude codex pi; do
+for app in fx claude codex pi omp; do
   cc -O0 -o "$T/bin/$app" -DAPP="\"$app\"" -DFAKE_HOME="\"$H\"" "$here/test/fake.c"
 done
 CODEX_ID=11111111-2222-4333-8444-555555555555
@@ -134,7 +134,10 @@ PI_ID=$(printf '%s\n' "$listing" | awk '$1 == "agents" && $2 == "3.1" { print $5
 AGENT3=$(printf '%s\n' "$listing" | awk '$1 == "agents" && $2 == "4.1" && $3 == "chat" { print $5 }')
 expect "claude chat with a multi-word system prompt" test -n "$AGENT3"
 pi_folder="${T#/}/my proj"
+expect "omp chat from the record its extension writes" has_line '^agents 5\.1 chat omp 00000000-0000-7000-8000-'
+OMP_ID=$(printf '%s\n' "$listing" | awk '$1 == "agents" && $2 == "5.1" { print $5 }')
 PI_FILE="$H/.pi/agent/sessions/--${pi_folder//\//-}--/2026-11-13T10-00-00-000Z_$PI_ID.jsonl"
+OMP_FILE="$H/.omp/agent/sessions/--${pi_folder//\//-}--/2026-11-13T10-00-00-000Z_$OMP_ID.jsonl"
 
 echo "2. Restart: Rex brings back the tabs, rex-durable the programs"
 stop_server
@@ -178,6 +181,13 @@ if [ "$os" = Darwin ]; then
   expect "its system prompt came back as one word, and its env" contains "$prompt_cmd" \
     '"--system-prompt","Create Rex panes as requested. Keep replies brief.","--remote-control","Xenomorph","--resume"' \
     '"MAX_THINKING_TOKENS=0"'
+fi
+omp_pid=$(pgrep -f -x "$T/bin/omp --model openai-codex/gpt-5.6-luna --append-system-prompt two words --resume $OMP_FILE" || true)
+expect "omp chat reopened on its session file with its options" test -n "$omp_pid"
+expect "omp's env came back" has_words "$(ps -wwE -o command= -p "${omp_pid:-0}")" MAX_THINKING_TOKENS=0
+if [ "$os" = Darwin ]; then
+  expect "its appended prompt came back as one word" contains "$("$T/app/procargs" "${omp_pid:-0}")" \
+    '"--append-system-prompt","two words","--resume"'
 fi
 expect "no unkept env in any save" sh -c "! grep -rq hush '$T/durable'"
 expect "a busy tab was waited for" grep -q 'trying again' "$T/startup.log"
@@ -243,6 +253,7 @@ expect "first claude chat in a shared folder back" has_line "^agents 1\.1 chat c
 expect "second claude chat in a shared folder back" has_line "^agents 2\.1 chat claude $AGENT2 "
 expect "pi chat back" has_line "^agents 3\.1 chat pi $PI_ID "
 expect "claude chat with a multi-word system prompt back" has_line "^agents 4\.1 chat claude $AGENT3 "
+expect "omp chat back" has_line "^agents 5\.1 chat omp $OMP_ID "
 expect "side session's chat back" has_line '^side 1\.1 chat fx FXB '
 expect "one copy of each chat" test "$(running "$T/bin/fx --resume FXA")" = 1
 rm -f "$T/supervise"

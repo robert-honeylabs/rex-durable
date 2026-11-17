@@ -25,7 +25,7 @@ assert(rex.call("session.create", { label = "side", initial_windows = {
   { layout = tab(q(bin .. "/fx") .. " --resume FXB") },
 } }))
 -- Two Claude Code chats in one folder, told apart by their process records,
--- and a pi chat.
+-- and pi and omp chats.
 assert(rex.call("session.create", { label = "agents", initial_windows = {
   { layout = tab("FORCE_COLOR=3 MAX_THINKING_TOKENS=0 SECRET_TOKEN=hush " ..
                  q(bin .. "/claude") .. " --model sonnet --dangerously-skip-permissions" ..
@@ -37,5 +37,7 @@ assert(rex.call("session.create", { label = "agents", initial_windows = {
   { layout = tab("MAX_THINKING_TOKENS=0 " .. q(bin .. "/claude") .. " --model sonnet --tools \"Bash\"" ..
                  " --system-prompt \"Create Rex panes as requested. Keep replies brief.\"" ..
                  " --remote-control \"Xenomorph\"", dir2) },
+  { layout = tab("MAX_THINKING_TOKENS=0 SECRET_TOKEN=hush " .. q(bin .. "/omp") ..
+                 " --model openai-codex/gpt-5.6-luna --append-system-prompt \"two words\" --api-key sk-x") },
 } }))
 return "ok"
