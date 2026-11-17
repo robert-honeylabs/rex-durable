@@ -135,6 +135,10 @@ check("pi reopens its session file with its options",
   "pi --model openai/gpt-6-astra --thinking xhigh --session '/h/.pi/agent/sessions/--my proj--/t_" .. uuid .. ".jsonl'")
 check("pi without a session file reopens by ID",
   cmd({ app = "pi", id = "01a1e57d", argv = { "pi", "--session", "01a1e57d" } }), "pi --session 01a1e57d")
+check("a chat is saved with only the options it reopens with",
+  M.saved_argv({ app = "omp", argv = { "/opt/homebrew/bin/omp", "--api-key", "sk-x", "--model", "m",
+                                       "--append-system-prompt", "two words", "-p" } }),
+  { "/opt/homebrew/bin/omp", "--model", "m", "--append-system-prompt", "two words" })
 check("omp reopens its session file with its options",
   cmd({ app = "omp", id = uuid, session_file = "/h/.omp/agent/sessions/-p/t_" .. uuid .. ".jsonl",
         argv = { "omp", "--model", "openai-codex/gpt-5.6-luna", "--append-system-prompt", "two words",
