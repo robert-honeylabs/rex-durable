@@ -10,10 +10,11 @@ Rex saves your sessions, tabs, and splits when its server stops, and restores th
 | Claude Code chat | Reopens on its conversation: `claude --resume <id>` |
 | Codex chat | Reopens on its conversation: `codex resume <id>` |
 | [pi](https://github.com/badlogic/pi-mono) chat | Reopens on its conversation: `pi --session <file>` |
+| [omp](https://omp.sh) (oh-my-pi) chat | Reopens on its conversation: `omp --resume <file>` |
 | Any other program | Typed at the prompt, not run. Press Enter if you want it. |
 | Plain shell | Left alone |
 
-Chats keep their options, such as `--model`, and come back in the same tab, split, and folder.
+Chats keep their options, such as `--model` or a `--system-prompt` with spaces in it, and come back in the same tab, split, and folder.
 
 ## Install
 
@@ -27,9 +28,10 @@ The installer:
 
 1. Finds Rex's `rex` command. On macOS it uses the copy Rex keeps up to date in `~/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/`, so Rex updates don't break it.
 2. Copies `durable.lua` to `~/Library/Application Support/rex-durable/` on macOS, or `~/.local/share/rex-durable/` on Linux.
-3. Starts it as a login service: a launchd agent on macOS, a systemd user service on Linux.
-4. Adds command palette actions (`rex_durable.lua` in your Rex config folder). `--add-to-config` also loads them from `init.lua` for you. Without it, the installer prints the one line to add.
-5. If you use pi (`~/.pi/agent` exists), adds the pi extension that tells rex-durable which conversation each pi chat is on.
+3. On macOS, compiles `procargs.c` into `procargs` beside it, so option values with spaces come back as one word. This needs the Xcode command line tools; without them, rex-durable falls back to `ps` and such values come back split into words.
+4. Starts it as a login service: a launchd agent on macOS, a systemd user service on Linux.
+5. Adds command palette actions (`rex_durable.lua` in your Rex config folder). `--add-to-config` also loads them from `init.lua` for you. Without it, the installer prints the one line to add.
+6. If you use pi or omp (`~/.pi/agent` or `~/.omp/agent` exists), adds the extension that tells rex-durable which conversation each of their chats is on.
 
 Run `./install.sh` again to update. Use `--no-service` to install the files without the service, or `REX=/path/to/rex ./install.sh` to choose the `rex` command.
 
@@ -62,13 +64,14 @@ Add `programs=false` to any mode to reopen chats only, and never type other prog
 `durable.lua` is a [Rex Lua script](https://www.superlogical.com/rex/docs/automate/lua-scripts). The service runs it with `rex do durable.lua --all`, which hears events from every session. It uses only Rex's public API:
 
 - **Watching.** On a timer (`rex.every`) and after layout and terminal events (`rex.on`), it starts a short `rex do durable.lua mode=save`. Each save runs on its own connection, so reading every session never affects the watcher.
-- **Saving.** For each tab, it records the block ID, the folder, and the program from the terminal's `process` method. It then works out which conversation each chat is on:
+- **Saving.** For each tab, it records the block ID, the folder, and the program from the terminal's `process` method. On macOS, `ps` joins a command line's words with spaces, so `procargs` reads each program's exact words and environment from the kernel instead. It then works out which conversation each chat is on:
   - **fx** holds a lock file for its session (`~/.fx/sessions/v2/<id>/lock`).
   - **Codex** keeps its rollout file open (`~/.codex/sessions/…/rollout-…-<id>.jsonl`), or the ID is on its command line (`codex resume <id>`).
   - **Claude Code** writes a record for each running chat (`~/.claude/sessions/<pid>.json`) naming its current conversation, so it follows `/clear` and `/resume`, and two chats in one folder each reopen on their own conversation. Without a record it uses `--resume <id>` from the command line, then the newest session file for that folder written since the chat started.
-  - **pi** hides its command line, so the installer adds a small pi extension (`~/.pi/agent/extensions/rex-durable.ts`). It writes `~/.pi/agent/rex-durable/<pid>.json` with the chat's session file, command line, and the environment variables below. Without the extension, rex-durable uses the newest session file for that folder, and the chat's options are lost. A pi chat where nothing has been said yet has no session file, so it comes back typed.
+  - **pi** hides its command line, so the installer adds a small extension (`extension/rex-durable.ts`, copied to `~/.pi/agent/extensions/`). It writes `~/.pi/agent/rex-durable/<pid>.json` with the chat's session file, command line, and the environment variables below. Without the extension, rex-durable uses the newest session file for that folder, and the chat's options are lost. A pi chat where nothing has been said yet has no session file, so it comes back typed.
+  - **omp** loads the same extension from `~/.omp/agent/extensions/`, which writes `~/.omp/agent/rex-durable/<pid>.json` and follows `/new`, `/resume`, and `/fork`. It records only the main chat, not the subagents omp runs in the same process. Without a record, rex-durable uses `--resume` from the command line, then the newest session file for that folder.
 
-  A reopened chat keeps the options that shape it, such as the model, permission mode, Claude's `--remote-control`, and Codex's `--yolo`. Options tied to the old run, like Claude's `--worktree`, are dropped. Two environment variables set when the chat started, `FORCE_COLOR` and `MAX_THINKING_TOKENS`, are typed back in front of the command. No other environment is saved, so tokens and secrets never reach a save file.
+  A reopened chat keeps the options that shape it, such as the model, permission mode, system prompt, allowed tools, MCP config, Claude's `--remote-control`, and Codex's `--yolo`. Options tied to the old run, like Claude's `--worktree`, are dropped, and so is anything else on the command line, such as an API key; only the kept options are saved. Two environment variables set when the chat started, `FORCE_COLOR` and `MAX_THINKING_TOKENS`, are typed back in front of the command. No other environment is saved, so tokens and secrets never reach a save file.
 
   Saves go to `~/Library/Application Support/rex-durable/` on macOS, or `~/.local/state/rex-durable/` on Linux. It keeps the last save of each of the latest 10 servers.
 - **Restoring.** When the watcher connects to a server instance it hasn't seen, it takes the last save from the previous server. Rex restores its own sessions with the same block IDs, so each program goes back into exactly the tab it came from, by block ID first and then by session name and position. If the server starts empty, for example after `rex server stop --discard`, rex-durable creates the saved sessions itself.
@@ -106,7 +109,7 @@ test/e2e.sh --unit     # unit tests only
 lua5.1 test/platform.lua   # process and file helpers on Linux, without Rex
 ```
 
-The end-to-end test needs Rex and a C compiler. It runs its own Rex server on its own socket, with fake fx, Claude Code, Codex, and pi chats in a throwaway home folder. It never connects to your Rex server and never touches your real chats.
+The end-to-end test needs Rex and a C compiler. It runs its own Rex server on its own socket, with fake fx, Claude Code, Codex, pi, and omp chats in a throwaway home folder. It never connects to your Rex server and never touches your real chats.
 
 rex-durable is not made by or affiliated with Superlogical.
 
