@@ -8,7 +8,7 @@
  *           and FAKE_HOME/.claude/sessions/<pid>.json unless FAKE_NO_RECORD is set
  *   pi      writes FAKE_HOME/.pi/agent/sessions/--<folder>--/<time>_<id>.jsonl and
  *           closes it, and FAKE_HOME/.pi/agent/rex-durable/<pid>.json the way
- *           pi/rex-durable.ts does, with its command line and FORCE_COLOR and
+ *           extension/rex-durable.ts does, with its command line and FORCE_COLOR and
  *           SECRET_TOKEN from its environment
  *
  * Built by test/e2e.sh with -DAPP="fx" (or claude, codex, pi) and -DFAKE_HOME.

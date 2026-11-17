@@ -90,14 +90,14 @@ if [ "$os" = Darwin ]; then
   fi
 fi
 
-# pi hides which conversation it's on; this extension tells rex-durable.
-pi_agent="$HOME/.pi/agent"
-if [ -d "$pi_agent" ]; then
-  mkdir -p "$pi_agent/extensions"
-  cp "$here/pi/rex-durable.ts" "$pi_agent/extensions/rex-durable.ts.new" &&
-    mv "$pi_agent/extensions/rex-durable.ts.new" "$pi_agent/extensions/rex-durable.ts"
-  say "Installed the pi extension $pi_agent/extensions/rex-durable.ts"
-fi
+# pi and omp hide which conversation they're on; this extension tells rex-durable.
+for agent in "$HOME/.pi/agent" "$HOME/.omp/agent"; do
+  [ -d "$agent" ] || continue
+  mkdir -p "$agent/extensions"
+  cp "$here/extension/rex-durable.ts" "$agent/extensions/rex-durable.ts.new" &&
+    mv "$agent/extensions/rex-durable.ts.new" "$agent/extensions/rex-durable.ts"
+  say "Installed the extension $agent/extensions/rex-durable.ts"
+done
 
 # A PATH for the service, so it finds lsof, fx, claude, and codex.
 service_path="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
