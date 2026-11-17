@@ -786,7 +786,10 @@ local function collect()
   resolve_chats(pending, info)
   for _, s in ipairs(sessions) do
     for _, w in ipairs(s.windows) do
-      for _, pane in ipairs(M.panes(w.layout)) do pane.pid = nil end
+      for _, pane in ipairs(M.panes(w.layout)) do
+        pane.pid = nil
+        if pane.kind == "chat" then pane.argv = M.saved_argv(pane) end
+      end
     end
   end
   return {
@@ -926,6 +929,16 @@ function M.kept_options(argv, spec)
     end
   end
   return out
+end
+
+-- A chat's command line as saved: the program and the options it reopens
+-- with, so nothing else on it, such as an API key, is written to disk.
+function M.saved_argv(pane)
+  local argv = { list(pane.argv)[1] }
+  for _, option in ipairs(M.kept_options(pane.argv, M.CHATS[pane.app])) do
+    argv[#argv + 1] = option
+  end
+  return argv
 end
 
 local function chat_executable(pane)

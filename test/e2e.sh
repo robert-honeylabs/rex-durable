@@ -190,6 +190,7 @@ if [ "$os" = Darwin ]; then
     '"--append-system-prompt","two words","--resume"'
 fi
 expect "no unkept env in any save" sh -c "! grep -rq hush '$T/durable'"
+expect "no API key in any save" sh -c "! grep -rq sk-x '$T/durable'"
 expect "a busy tab was waited for" grep -q 'trying again' "$T/startup.log"
 expect "second session's chat reopened once its tab was free" has_line '^side 1\.1 chat fx FXB '
 expect "program typed, not run" test "$(running "sleep 4242")" = 0
