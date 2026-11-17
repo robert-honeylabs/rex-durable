@@ -488,7 +488,7 @@ M.CHATS = {
                  ["--no-mcp"] = true, ["--no-skills"] = true, ["-ns"] = true,
                  ["--no-context-files"] = true, ["-nc"] = true },
     package = "pi-coding-agent",
-    -- Written by pi/rex-durable.ts. pi's process title hides its command line
+    -- Written by extension/rex-durable.ts. pi's process title hides its command line
     -- and environment from ps, so the record carries them.
     record = function(pid, home)
       local r = read_pid_record(home .. "/.pi/agent/rex-durable/" .. pid .. ".json", pid)

@@ -209,7 +209,7 @@ check("claude keeps its prompt, tool, MCP, effort, plugin, and name options",
                  "--plugin-dir", "/p", "--name", "rex", "-n", "two", "--print" } }),
   "claude --append-system-prompt 'be terse' --allowedTools 'Bash(git *)' --disallowedTools Edit " ..
   "--mcp-config /m.json --effort high --plugin-dir /p --name rex -n two --resume " .. uuid)
--- pi's record, written by pi/rex-durable.ts: its title hides argv and env from ps
+-- pi's record, written by extension/rex-durable.ts: its title hides argv and env from ps
 local pi_file = home .. "/.pi/agent/sessions/--w--/2026-11-16T17-52-21-649Z_" .. uuid .. ".jsonl"
 local function pi_tab(pid, record)
   put(home .. "/.pi/agent/rex-durable/" .. pid .. ".json", rex.json.encode(record))
